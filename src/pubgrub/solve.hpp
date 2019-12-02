@@ -218,7 +218,7 @@ struct solver {
         debug_say("Checking for conflicts with ", ic);
         const term_type* unsat_term = nullptr;
         for (const term_type& term : ic.terms()) {
-            auto rel = sln.relation_of(term);
+            auto rel = sln.relation_to(term);
             if (rel == set_relation::disjoint) {
                 return no_conflict{};
             } else if (rel == set_relation::overlap) {

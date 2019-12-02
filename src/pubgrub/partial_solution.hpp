@@ -93,7 +93,7 @@ private:
         }
     }
 
-    static set_relation _relation_of(const term_type& term,
+    static set_relation _relation_to(const term_type& term,
                                      const term_map&  positives,
                                      const term_map&  negatives,
                                      const term_type* additional) noexcept {
@@ -167,11 +167,11 @@ public:
     }
 
     bool satisfies(const term_type& term) const noexcept {
-        return relation_of(term) == set_relation::subset;
+        return relation_to(term) == set_relation::subset;
     }
 
-    set_relation relation_of(const term_type& term) const noexcept {
-        return _relation_of(term, _positives, _negatives, nullptr);
+    set_relation relation_to(const term_type& term) const noexcept {
+        return _relation_to(term, _positives, _negatives, nullptr);
     }
 
     const requirement_type* next_unsatisfied_term() const noexcept {
@@ -209,10 +209,10 @@ public:
                 _record_term(as.term, positives, negatives);
                 return std::all_of(begin(ts), end(ts), [&](const term_type& term) {
                     if (with) {
-                        return _relation_of(term, positives, negatives, &with->get().term)
+                        return _relation_to(term, positives, negatives, &with->get().term)
                             == set_relation::subset;
                     } else {
-                        return _relation_of(term, positives, negatives, nullptr)
+                        return _relation_to(term, positives, negatives, nullptr)
                             == set_relation::subset;
                     }
                 });
