@@ -4,6 +4,7 @@
 #include <pubgrub/term.hpp>
 
 #include <initializer_list>
+#include <numeric>
 #include <ostream>
 
 namespace pubgrub {
@@ -18,6 +19,33 @@ public:
 
 private:
     term_vec _terms;
+
+    void _coalesce() noexcept {
+        std::sort(_terms.begin(), _terms.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.key() < rhs.key();
+        });
+        auto walk = _terms.begin();
+        while (walk != _terms.end()) {
+            walk = _coalesce_at(walk);
+        }
+    }
+
+    auto _coalesce_at(typename term_vec::iterator pos) noexcept {
+        auto subseq_end = std::find_if(pos, _terms.end(), [&](const auto& term) {
+            return pos->key() != term.key();
+        });
+        assert(pos != subseq_end);
+        *pos = std::reduce(std::next(pos),
+                           subseq_end,
+                           *pos,
+                           [](const term_type& lhs, const term_type& rhs) -> term_type {
+                               assert(keys_equivalent(lhs.key(), rhs.key()));
+                               auto un = lhs.intersection(rhs);
+                               assert(un);
+                               return *un;
+                           });
+        return _terms.erase(std::next(pos), subseq_end);
+    }
 
 public:
     incompatibility() = default;
@@ -34,7 +62,9 @@ public:
 
     template <detail::decays_to<term_vec> VecArg>
     explicit incompatibility(VecArg&& arg)
-        : _terms(std::forward<VecArg>(arg)) {}
+        : _terms(std::forward<VecArg>(arg)) {
+        _coalesce();
+    }
 
     template <detail::iterator_of<term_type> Iter>
     incompatibility(Iter it, Iter stop)
@@ -42,7 +72,9 @@ public:
 
     template <detail::iterator_of<term_type> Iter>
     incompatibility(Iter it, Iter stop, allocator_type alloc)
-        : _terms(it, stop, alloc) {}
+        : _terms(it, stop, alloc) {
+        _coalesce();
+    }
 
     const term_vec& terms() const noexcept { return _terms; }
 
