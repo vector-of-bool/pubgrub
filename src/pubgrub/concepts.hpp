@@ -98,6 +98,15 @@ decltype(auto) key_of(const K& k) {
 template <keyed T>
 using key_type_t = std::decay_t<decltype(key_of(std::declval<T&&>()))>;
 
+template <typename T>
+concept set = requires(const T s) {
+    { s.contains(s) } -> detail::boolean;
+    { s.disjoint(s) } -> detail::boolean;
+    { s.intersection(s) } -> detail::same_as<T>;
+    { s.union_(s) } -> detail::same_as<T>;
+    { s.difference(s) } -> detail::same_as<T>;
+};
+
 template <keyed T>
 concept requirement = requires(const T req) {
     { req.implied_by(req) } -> detail::boolean;

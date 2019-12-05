@@ -15,7 +15,8 @@ TEST_CASE("Record a basic term") {
     pubgrub::partial_solution<pubgrub::test::simple_req> sln;
 
     using pubgrub::test::simple_term;
-    sln.record_derivation(simple_term{{"foo", {5, 6}}}, std::nullopt);  // Record foo=5
+    pubgrub::incompatibility<pubgrub::test::simple_req> dummy_ic;
+    sln.record_derivation(simple_term{{"foo", {5, 6}}}, dummy_ic);  // Record foo=5
 
     CHECK_FALSE(sln.satisfies(simple_term{{"foo", {4, 5}}}));
     CHECK_FALSE(sln.satisfies(simple_term{{"foo", {12, 13}}}));

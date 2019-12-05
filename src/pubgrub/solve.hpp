@@ -75,12 +75,11 @@ public:
         const ic_type& new_ic = _ics.emplace_back(std::move(ic));
         for (const term_type& term : new_ic.terms()) {
             auto existing = _seq_for_key(term.key());
-            if (existing == _by_key.end()) {
+            if (existing == _by_key.end() || existing->key != term.key()) {
                 existing = _by_key.insert(existing, {term.key(), ic_ref_vec{_alloc}});
             }
             existing->ics.push_back(std::cref(new_ic));
         }
-        debug_say("Incompatibility: ", new_ic);
         return new_ic;
     }
 
@@ -123,66 +122,58 @@ struct solver {
     sln_type           sln{alloc};
 
     void preload_root(requirement_type req) noexcept {
-        debug_say("Preloading root requirement: ", req);
         ics.record(ic_type{{term_type{req, false}}, alloc});
         changed.insert(key_of(req));
     }
 
-    auto solve() noexcept {
+    auto solve() {
         for (; !changed.empty(); speculate_one_decision()) {
             unit_propagation();
         }
 
-        debug_say("Solve completed successfully");
         return sln.completed_solution();
     }
 
     void speculate_one_decision() noexcept {
-        debug_say("Speculating the next decision");
         const requirement_type* next_req = sln.next_unsatisfied_term();
         if (!next_req) {
             return;
         }
 
-        debug_say("Next requirement is ", *next_req);
-
         // Find the best candidate package for the term
         const auto& cand_req = provider.best_candidate(*next_req);
         if (!cand_req) {
-            debug_say("Provider has no candidate for requirement ", *next_req);
-            assert(false && "Unimplemented: No package can satisfy requirement");
-            std::terminate();
+            ics.record(ic_type{{term_type{*next_req, true}}, alloc});
+            changed.insert(key_of(*next_req));
             return;
         }
-
-        debug_say("Provider gave us candidate requirement: ", *cand_req);
 
         auto&& cand_reqs      = provider.requirements_of(*cand_req);
         bool   found_conflict = false;
         for (requirement_type req : cand_reqs) {
-            debug_say("Loading incompatibilities for dependency of ", *cand_req, ": ", req);
             const ic_type& new_ic = ics.record(
                 ic_type{{term_type{*cand_req}, term_type{std::move(req), false}}, alloc});
             assert(new_ic.terms().size() == 2);
-            found_conflict = found_conflict
-                || (sln.satisfies(new_ic.terms()[0]) && sln.satisfies(new_ic.terms()[1]));
+            found_conflict = found_conflict || std::all_of(
+                new_ic.terms().cbegin(),
+                new_ic.terms().cend(),
+                [&](const term_type& ic_term) {
+                    return ic_term.key() == key_of(*cand_req)
+                        || sln.satisfies(ic_term);
+                }
+            );
         }
 
         if (!found_conflict) {
-            debug_say("No existing conflict was found by the new requirements");
-            debug_say("!!!!!!!!!!!! Decision: ", *cand_req, " !!!!!!!!!!!!!!!");
-            sln.record_decision(term_type{*cand_req}, std::nullopt);
+            sln.record_decision(term_type{*cand_req});
         }
 
         changed.insert(key_of(*cand_req));
-        debug_say("Speculative decision is complete");
     }
 
-    void unit_propagation() noexcept {
-        debug_say("Beginning unit propagation");
+    void unit_propagation() {
         while (!changed.empty()) {
             auto next_unit = changed.extract(changed.begin());
-            debug_say("Propagate for key: ", next_unit.value());
             propagate_one(next_unit.value());
         }
     }
@@ -190,12 +181,13 @@ struct solver {
     void propagate_one(const key_type& key) {
         auto ics_for_name = ics.for_name(key);
         for (const ic_type& ic : ics_for_name) {
-            propagate_ic(ic);
+            if (!propagate_ic(ic)) {
+                break;
+            }
         }
     }
 
-    void propagate_ic(const ic_type& ic) {
-        debug_say("Propagating incompatibility: ", ic);
+    bool propagate_ic(const ic_type& ic) {
         auto res = check_conflict(ic);
 
         if (auto almost = std::get_if<almost_conflict>(&res)) {
@@ -206,16 +198,18 @@ struct solver {
             auto    res2           = check_conflict(conflict_cause);
             auto    almost         = std::get_if<almost_conflict>(&res2);
             assert(almost && "Conflict resolution entered an invalid state");
+            changed.clear();
             sln.record_derivation(almost->term.inverse(), ic);
             changed.insert(almost->term.key());
+            return false;
         } else {
             assert(std::holds_alternative<no_conflict>(res));
             // Nothing to do
         }
+        return true;
     }
 
     conflict_result check_conflict(const ic_type& ic) const noexcept {
-        debug_say("Checking for conflicts with ", ic);
         const term_type* unsat_term = nullptr;
         for (const term_type& term : ic.terms()) {
             auto rel = sln.relation_to(term);
@@ -232,54 +226,76 @@ struct solver {
         }
 
         if (unsat_term == nullptr) {
-            debug_say("Conflict found!");
             return conflict{};
         }
 
-        debug_say("One unsatisfied term: ", *unsat_term);
         return almost_conflict{*unsat_term};
     }
 
-    ic_type resolve_conflict(ic_type ic) noexcept {
+    ic_type resolve_conflict(ic_type ic) {
         bool ic_changed = false;
         while (true) {
-            auto        first_sat_it = sln.first_satisfier_of(ic.terms());
-            const auto& satisfier    = *first_sat_it;
-            auto        prev_sat     = sln.first_satisfier_of(ic.terms(), satisfier);
-            assert(prev_sat < first_sat_it);
-            auto prev_sat_level = prev_sat->decision_level;
-            if (satisfier.kind == sln_type::assignment_kind::decision
-                || prev_sat_level != satisfier.decision_level) {
+            // auto&& satisfier                        = *sln.first_satisfier_of(ic.terms());
+            // auto prev_sat_level = sln.first_satisfier_of(ic.terms(), satisfier)->decision_level;
+            // const auto& [satisfier, prev_sat_level] = sln.build_backtrack_info(ic.terms());
+            const auto& [term, satisfier, prev_sat_level, difference]
+                = sln.build_backtrack_info_2(ic.terms());
+            if (satisfier.is_decision() || prev_sat_level < satisfier.decision_level) {
+                sln.backtrack_to(prev_sat_level);
                 if (ic_changed) {
                     ics.record(ic_type(ic));
                 }
-                sln.backtrack_to(prev_sat_level);
                 return ic;
             } else {
-                auto prior_cause = build_prior_cause(ic, satisfier.cause, satisfier.term.key());
-                assert(false && "Conflict rewrite is not ready.");
+                assert(satisfier.cause);
+                typename ic_type::term_vec new_terms{alloc};
+                for (const auto& t : ic.terms()) {
+                    if (&t != &term) {
+                        new_terms.push_back(t);
+                    }
+                }
+                for (const auto& t : satisfier.cause->terms()) {
+                    if (t.key() != satisfier.term.key()) {
+                        new_terms.push_back(t);
+                    }
+                }
+                if (difference) {
+                    new_terms.push_back(difference->inverse());
+                }
+                assert(std::all_of(new_terms.cbegin(),
+                                   new_terms.cend(),
+                                   [&](const term_type& term) { return sln.satisfies(term); }));
+                auto ic2 = ic_type(new_terms);
+                assert(!std::equal(ic.terms().begin(),
+                                   ic.terms().end(),
+                                   ic2.terms().begin(),
+                                   ic2.terms().end()));
+                ic         = ic_type(std::move(new_terms));
+                ic_changed = true;
+                // assert(std::holds_alternative<conflict>(check_conflict(ic)));
             }
         }
     }
 
-    ic_type build_prior_cause(const ic_type&  ic,
-                              const ic_type*  prev_sat_cause,
-                              const key_type& exclude_key) const noexcept {
+    auto build_prior_cause_term(const ic_type&  ic,
+                                const ic_type&  prev_sat_cause,
+                                const key_type& exclude_key) const noexcept {
         auto copy_filter
-            = [&](const term_type& term) { return keys_equivalent(term.key(), exclude_key); };
+            = [&](const term_type& term) { return !keys_equivalent(term.key(), exclude_key); };
         using term_alloc = detail::rebind_alloc_t<Allocator, term_type>;
         typename ic_type::term_vec terms{term_alloc(alloc)};
         std::copy_if(ic.terms().begin(),  //
                      ic.terms().end(),
                      std::back_inserter(terms),
                      copy_filter);
-        if (prev_sat_cause) {
-            std::copy_if(prev_sat_cause->terms().begin(),
-                         prev_sat_cause->terms().end(),
-                         std::back_inserter(terms),
-                         copy_filter);
-        }
-        return ic_type(std::move(terms));
+        std::copy_if(prev_sat_cause.terms().begin(),
+                     prev_sat_cause.terms().end(),
+                     std::back_inserter(terms),
+                     copy_filter);
+        assert(std::all_of(ic.terms().cbegin(), ic.terms().cend(), [&](const term_type& term) {
+            return sln.satisfies(term);
+        }));
+        return terms;
     }
 };
 
@@ -287,7 +303,6 @@ struct solver {
 
 template <requirement_iterator Iter, provider<detail::value_type_t<Iter>> P, typename Allocator>
 decltype(auto) solve(Iter it, Iter stop, P&& p, Allocator alloc) {
-    detail::debug_say("Beginning new pubgrub solve");
     detail::solver<detail::value_type_t<Iter>, P, Allocator> solver{alloc, p};
     for (; it != stop; ++it) {
         solver.preload_root(*it);

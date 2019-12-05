@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pubgrub/concepts.hpp>
+#include <pubgrub/interval.hpp>
 #include <pubgrub/term.hpp>
 
 #include <string>
@@ -38,8 +39,15 @@ struct simple_version_range {
         return simple_version_range{min_low, max_high};
     }
 
-    std::optional<simple_version_range> difference(simple_version_range) const noexcept {
-        return std::nullopt;
+    std::optional<simple_version_range> difference(simple_version_range other) const noexcept {
+        assert(!contains(other));
+        if (low < other.low) {
+            return simple_version_range{low, other.low};
+        } else if (high < other.high) {
+            return simple_version_range{high, other.high};
+        } else {
+            return *this;
+        }
     }
 
     friend bool operator==(const simple_version_range& lhs,
@@ -59,38 +67,41 @@ struct simple_version_range {
 
 struct simple_req {
     using key_type           = std::string;
-    using version_range_type = simple_version_range;
-    std::string          key;
-    simple_version_range range;
+    using version_range_type = interval_set<int>;
+    std::string        key;
+    version_range_type range;
 
-    simple_req with_range(simple_version_range r) const noexcept { return {key, r}; }
+    simple_req with_range(version_range_type r) const noexcept { return {key, r}; }
 
     std::optional<simple_req> intersection(simple_req o) const noexcept {
-        auto isect = range.intersection(o.range);
-        if (!isect) {
+        const auto rng = range.intersection(o.range);
+        if (rng.empty()) {
             return std::nullopt;
+        } else {
+            return with_range(rng);
         }
-        return with_range(*isect);
     }
 
     std::optional<simple_req> union_(simple_req o) const noexcept {
-        auto un = range.union_(o.range);
-        if (!un) {
+        const auto rng = range.union_(o.range);
+        if (rng.empty()) {
             return std::nullopt;
+        } else {
+            return with_range(rng);
         }
-        return with_range(*un);
     }
 
     std::optional<simple_req> difference(simple_req o) const noexcept {
-        auto diff = range.difference(o.range);
-        if (!diff) {
+        const auto rng = range.difference(o.range);
+        if (rng.empty()) {
             return std::nullopt;
+        } else {
+            return with_range(rng);
         }
-        return with_range(*diff);
     }
 
     auto implied_by(simple_req other) const noexcept { return range.contains(other.range); }
-    auto excludes(simple_req other) const noexcept { return !range.overlaps(other.range); }
+    auto excludes(simple_req other) const noexcept { return range.disjoint(other.range); }
 
     friend bool operator==(const simple_req& lhs, const simple_req& rhs) noexcept {
         return std::tie(lhs.key, lhs.range) == std::tie(rhs.key, rhs.range);

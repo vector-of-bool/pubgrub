@@ -5,32 +5,19 @@
 #include <pubgrub/term.hpp>
 #include <pubgrub/term_accumulator.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <set>
+#include <stdexcept>
 #include <vector>
-
-#ifndef PUBGRUB_DEBUG
-#define PUBGRUB_DEBUG 0
-#endif
-
-#if PUBGRUB_DEBUG != 0 && PUBGRUB_DEBUG != 1
-#error "PUBGRUB_DEBUG should be defined to either `0` or `1`"
-#endif
 
 namespace pubgrub {
 
-namespace detail {
-
-template <typename... Ts>
-void debug_say(const Ts&... args) {
-    if constexpr (PUBGRUB_DEBUG) {
-        ((std::cerr << args), ...);
-        std::cerr << "\n";
-    }
-}
-
-}  // namespace detail
+class no_solution : public std::runtime_error {
+    using runtime_error::runtime_error;
+};
 
 template <requirement Req, typename Allocator = std::allocator<Req>>
 class partial_solution {
@@ -41,15 +28,11 @@ public:
     using key_type             = typename term_type::key_type;
     using incompatibility_type = incompatibility<requirement_type, allocator_type>;
 
-    enum class assignment_kind {
-        decision,
-        derivation,
-    };
     struct assignment {
         term_type                   term;
-        assignment_kind             kind;
         std::size_t                 decision_level;
         const incompatibility_type* cause;
+        bool                        is_decision() const noexcept { return cause == nullptr; }
     };
 
 private:
@@ -67,57 +50,45 @@ private:
     term_map       _negatives{term_map_alloc_type(_alloc)};
     key_set        _decided_keys{key_allocator_type(_alloc)};
 
-    static void _record_or_restrict(term_map& map, const term_type& t) {
-        // Try to insert this new term into the map
-        auto key                          = t.key();
-        const auto [existing, did_insert] = map.try_emplace(std::move(key), t);
-        if (!did_insert) {
-            // Entry already exists. Shrink the entry to the intersection formed
-            // with our new term
-            auto isect = existing->second.intersection(t);
-            assert(isect.has_value());
-            existing->second = std::move(*isect);
+    void _register(const term_type& t) {
+        const auto pos_it = _positives.find(t.key());
+        if (pos_it != _positives.end()) {
+            auto opt_is = pos_it->second.intersection(t);
+            assert(opt_is);
+            pos_it->second = std::move(*opt_is);
+            return;
         }
-    }
 
-    static void _record_term(const term_type& t, term_map& positives, term_map& negatives) {
-        if (t.positive) {
-            _record_or_restrict(positives, t);
-            // If we recorded a negative state for this term, drop it
-            auto negative = negatives.find(t.key());
-            if (negative != negatives.end()) {
-                negatives.erase(negative);
+        auto term   = t;
+        auto neg_it = _negatives.find(term.key());
+        if (neg_it != _negatives.end()) {
+            auto opt_t = t.intersection(neg_it->second);
+            assert(opt_t);
+            term = std::move(*opt_t);
+        }
+
+        if (term.positive) {
+            if (neg_it != _negatives.end()) {
+                // Remove the assignment from the negatives list
+                _negatives.erase(neg_it);
             }
+            assert(_positives.find(t.key()) == _positives.end());
+            _positives.emplace(t.key(), std::move(term));
         } else {
-            _record_or_restrict(negatives, t);
+            _negatives.insert_or_assign(t.key(), std::move(term));
         }
     }
 
     static set_relation _relation_to(const term_type& term,
                                      const term_map&  positives,
-                                     const term_map&  negatives,
-                                     const term_type* additional) noexcept {
+                                     const term_map&  negatives) noexcept {
         auto pos_it = positives.find(term.key());
         if (pos_it != positives.end()) {
-            if (additional && keys_equivalent(additional->key(), pos_it->second.key())) {
-                auto isect = pos_it->second.intersection(*additional);
-                if (!isect) {
-                    return set_relation::disjoint;
-                }
-                return isect->relation_to(term);
-            }
             return pos_it->second.relation_to(term);
         }
 
         auto neg_it = negatives.find(term.key());
         if (neg_it != negatives.end()) {
-            if (additional && keys_equivalent(additional->key(), neg_it->second.key())) {
-                auto isect = neg_it->second.intersection(*additional);
-                if (!isect) {
-                    return set_relation::disjoint;
-                }
-                return isect->relation_to(term);
-            }
             return neg_it->second.relation_to(term);
         }
 
@@ -132,38 +103,28 @@ public:
     std::vector<requirement_type, allocator_type> completed_solution() const noexcept {
         std::vector<requirement_type, allocator_type> ret{_alloc};
         for (const assignment& as : _assignments) {
-            if (as.kind == assignment_kind::decision) {
+            if (as.is_decision()) {
                 ret.push_back(as.term.requirement);
             }
         }
         return ret;
     }
 
-    void record_derivation(
-        term_type                                                         term,
-        std::optional<std::reference_wrapper<const incompatibility_type>> opt_cause) noexcept {
-        detail::debug_say("New derivation: ", term);
+    void record_derivation(term_type term, const incompatibility_type& cause) noexcept {
         auto& inserted
-            = _assignments.emplace_back(assignment{std::move(term),
-                                                   assignment_kind::derivation,
-                                                   _assignments.size(),
-                                                   opt_cause ? &opt_cause->get() : nullptr});
-        _record_term(inserted.term, _positives, _negatives);
+            = _assignments.emplace_back(assignment{std::move(term), _decided_keys.size(), &cause});
+        _register(inserted.term);
     }
 
-    void record_decision(
-        term_type                                                         term,
-        std::optional<std::reference_wrapper<const incompatibility_type>> opt_cause) noexcept {
-        detail::debug_say("New decision: ", term);
-        auto& inserted
-            = _assignments.emplace_back(assignment{std::move(term),
-                                                   assignment_kind::decision,
-                                                   _assignments.size(),
-                                                   opt_cause ? &opt_cause->get() : nullptr});
-        assert(inserted.term.positive);
-        _record_term(inserted.term, _positives, _negatives);
-        [[maybe_unused]] const auto did_insert = _decided_keys.emplace(inserted.term.key()).second;
+    void record_decision(term_type term) noexcept {
+
+        [[maybe_unused]] const auto did_insert = _decided_keys.emplace(term.key()).second;
         assert(did_insert && "More than one decision recorded for a single item");
+
+        auto& inserted
+            = _assignments.emplace_back(assignment{std::move(term), _decided_keys.size(), nullptr});
+        assert(inserted.term.positive);
+        _register(inserted.term);
     }
 
     bool satisfies(const term_type& term) const noexcept {
@@ -171,7 +132,7 @@ public:
     }
 
     set_relation relation_to(const term_type& term) const noexcept {
-        return _relation_to(term, _positives, _negatives, nullptr);
+        return _relation_to(term, _positives, _negatives);
     }
 
     const requirement_type* next_unsatisfied_term() const noexcept {
@@ -192,52 +153,94 @@ public:
 
     using assignment_iterator = typename assignment_vec::const_iterator;
 
-    template <detail::range_of<term_type> Terms>
-    assignment_iterator
-    first_satisfier_of(const Terms&                                            ts,
-                       std::optional<std::reference_wrapper<const assignment>> with
-                       = std::nullopt) const noexcept {
-        // Find the first assignment that satisfies all terms
-        term_map positives{_alloc};
-        term_map negatives{_alloc};
-        auto     first_sat = std::find_if(  //
-            _assignments.cbegin(),
-            _assignments.cend(),
-            [&](const assignment& as) noexcept {
-                using std::begin;
-                using std::end;
-                _record_term(as.term, positives, negatives);
-                return std::all_of(begin(ts), end(ts), [&](const term_type& term) {
-                    if (with) {
-                        return _relation_to(term, positives, negatives, &with->get().term)
-                            == set_relation::subset;
-                    } else {
-                        return _relation_to(term, positives, negatives, nullptr)
-                            == set_relation::subset;
-                    }
-                });
-            });
-        assert(first_sat != _assignments.cbegin());
-        assert(first_sat != _assignments.cend() && "Unexpected condition while backtracking.");
-        return first_sat;
-    }
-
     void backtrack_to(std::size_t decision_level) noexcept {
-        auto first_bad = std::partition_point(  //
-            _assignments.cbegin(),
-            _assignments.cend(),
-            [&](const assignment& as) noexcept { return as.decision_level < decision_level; });
-        assert(first_bad != _assignments.cend());
-        _assignments.erase(first_bad, _assignments.cend());
+        while (_assignments.back().decision_level > decision_level) {
+            _assignments.pop_back();
+        }
         _positives.clear();
         _negatives.clear();
         _decided_keys.clear();
         for (const auto& as : _assignments) {
-            _record_term(as.term, _positives, _negatives);
-            if (as.kind == assignment_kind::decision) {
+            _register(as.term);
+            if (as.is_decision()) {
                 _decided_keys.insert(as.term.key());
             }
         }
+    }
+
+    const assignment& satisfier_of(const term_type& term) const noexcept {
+        std::optional<term_type> assigned_term;
+
+        for (const assignment& as : _assignments) {
+            if (!keys_equivalent(as.term.key(), term.key())) {
+                continue;
+            }
+
+            if (!assigned_term) {
+                assigned_term = as.term;
+            } else {
+                assigned_term = assigned_term->intersection(as.term);
+            }
+
+            if (assigned_term->implies(term)) {
+                return as;
+            }
+        }
+        assert(false && "Unreachable");
+        std::terminate();
+    }
+
+    template <detail::range_of<term_type> Terms>
+    auto build_backtrack_info_2(const Terms& ts) const {
+        const term_type*         most_recent_term      = nullptr;
+        const assignment*        most_recent_satisfier = nullptr;
+        std::optional<term_type> difference;
+
+        std::size_t previous_satisfier_level = 0;
+
+        for (const term_type& term : ts) {
+            const assignment& satisfier = satisfier_of(term);
+            if (most_recent_satisfier == nullptr) {
+                most_recent_term      = &term;
+                most_recent_satisfier = &satisfier;
+            } else if (most_recent_satisfier < &satisfier) {
+                previous_satisfier_level
+                    = (std::max)(previous_satisfier_level, most_recent_satisfier->decision_level);
+                most_recent_term      = &term;
+                most_recent_satisfier = &satisfier;
+                difference            = std::nullopt;
+            } else {
+                previous_satisfier_level
+                    = (std::max)(previous_satisfier_level, satisfier.decision_level);
+            }
+            if (most_recent_term == &term) {
+                difference = most_recent_satisfier->term.difference(*most_recent_term);
+                if (difference) {
+                    previous_satisfier_level
+                        = (std::max)(satisfier_of(difference->inverse()).decision_level,
+                                     previous_satisfier_level);
+                }
+            }
+        }
+
+        if (!most_recent_satisfier) {
+            throw no_solution(
+                "There was no solution for the dependencies provided. The solver implementation is "
+                "still too young to have implemented a good backtrace of the failure. Sorry...");
+        }
+
+        struct info {
+            const term_type&         term;
+            const assignment&        satisfier;
+            const std::size_t        prev_sat_level;
+            std::optional<term_type> difference;
+        };
+        assert(most_recent_term);
+        assert(most_recent_satisfier);
+        return info{*most_recent_term,
+                    *most_recent_satisfier,
+                    previous_satisfier_level,
+                    std::move(difference)};
     }
 };
 

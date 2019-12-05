@@ -32,6 +32,37 @@ struct term {
 
     term inverse() const noexcept { return term{requirement, !positive}; }
 
+    std::optional<term> union_(const term& other) const noexcept {
+        assert(keys_equivalent(key(), other.key())
+               && "Cannot perform set operations on terms of differing keys");
+        if (positive == other.positive) {
+            // Simple case.
+            if (auto un = requirement.union_(other.requirement)) {
+                return term{std::move(*un), positive};
+            }
+            return std::nullopt;
+        }
+
+        if (positive) {
+            assert(!other.positive);
+            // The union of a positive range with a negative one is a bit trickier
+            // this: ---------%%%%%%%%%------------------------
+            // that: %%%%%%%%%%%%--------%%%%%%%%%%%%%%%%%%%%%%
+            // both: %%%%%%%%%%%%%%%%%%--%%%%%%%%%%%%%%%%%%%%%%
+            // or:
+            // this: --------------%%%%------------------------
+            // that: %%%%%%%%%%%%%%----%%%%%%%%%%%%%%%%%%%%%%%%
+            if (auto diff = other.requirement.difference(requirement)) {
+                return term{std::move(*diff), false};
+            }
+            return std::nullopt;
+        } else {
+            assert(other.positive);
+            // term union is commutative
+            return other.union_(*this);
+        }
+    }
+
     /**
      * Obtain a term that is the logical intersection of the two ranges defined by the terms
      */
@@ -45,6 +76,7 @@ struct term {
             }
             return std::nullopt;
         }
+
         if (!positive && !other.positive) {
             // Another simple case. Intersection is all values which do not lie within either range
             auto union_ = requirement.union_(other.requirement);
@@ -84,9 +116,66 @@ struct term {
             }
             return std::nullopt;
         } else {
-            assert(!other.positive);
+            assert(other.positive);
             // term intersection is commutative
             return other.intersection(*this);
+        }
+    }
+
+    std::optional<term> difference(const term& other) const noexcept {
+        assert(keys_equivalent(key(), other.key())
+               && "Cannot perform set operations on terms of differing keys");
+        if (positive && other.positive) {
+            // Simple case.
+            if (auto diff = requirement.difference(other.requirement)) {
+                return term{std::move(*diff), true};
+            }
+            return std::nullopt;
+        } else if (positive && !other.positive) {
+            // this: ---%%%%%%%%%---------
+            // that: %%%%%%-----%%%%%%%%%%
+            // res:  ------%%%%%----------
+            if (auto isect = requirement.intersection(other.requirement)) {
+                return term{std::move(*isect), true};
+            }
+            return std::nullopt;
+        } else if (!positive && other.positive) {
+            // this: %%%%%%----%%%%%%%%%%%
+            // that: ----%%%%%%%%%%%------
+            // res:  %%%%-----------%%%%%%
+            // or:
+            // this: %%%%-----------%%%%%%
+            // that: -------%%%%%---------
+            // res:  %%%%-----------%%%%%%
+            // or:
+            // this: %%%%%%%----------%%%%
+            // that: ----%%%%%%%%%----%%%%
+            // res:  %%%%-------------%%%%
+            if (auto un = requirement.union_(other.requirement)) {
+                return term{std::move(*un), false};
+            }
+            return std::nullopt;
+        } else {
+            assert(!positive && !other.positive);
+            // this: %%%%%%--------%%%%%%%%
+            // that: %%%%%%%%%%%-----%%%%%%
+            // res:  --------------%%------
+            // or:
+            // this: %%%%%%%%%--------%%%%%
+            // that: %%%%%--------%%%%%%%%%
+            // res:  -----%%%%-------------
+            // or:
+            // this: %%%%-----------%%%%%%%
+            // that: %%---------------%%%%%
+            // res:  --%%-----------%%-----
+            // or:
+            // this: %%%%-------------%%%%%
+            // that: %%%%%%%%%%---%%%%%%%%%
+            // res:  ----------------------
+            if (auto diff = other.requirement.difference(requirement)) {
+                return term{std::move(*diff), true};
+            }
+            return std::nullopt;
         }
     }
 
@@ -129,14 +218,21 @@ struct term {
                 }
             } else {
                 // Both negative ranges
-                if (requirement.implied_by(other.requirement)) {
-                    // this: %%%%%%%----------%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                    // that: %%%%%%%%%-------%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                    return false;
-                } else {
-                    // this: %%%%%%----------%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-                    // that: %%%%%----------------%%%%%%%%%%%%%%%%%%%%%%%
+                // this: %%%%%%%----------%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // that: %%%%%%%%%-------%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // or:
+                // this: %%%%%------------%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // that: %%%%%------------%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // or:
+                // this: %%%%%%----------%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // that: %%%%%----------------%%%%%%%%%%%%%%%%%%%%%%%
+                // or:
+                // this: %%%%%%%%%----%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                // that: %%%%%%%%%%%%%%%%%%%%%%%%%%---%%%%%%%%%%%%%%%
+                if (other.requirement.implied_by(requirement)) {
                     return true;
+                } else {
+                    return false;
                 }
             }
         }
@@ -209,6 +305,10 @@ struct term {
         }
         out << self.requirement << "]";
         return out;
+    }
+
+    friend bool operator==(const term& lhs, const term& rhs) noexcept {
+        return lhs.positive == rhs.positive && lhs.requirement == rhs.requirement;
     }
 };
 
