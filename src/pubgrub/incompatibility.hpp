@@ -35,15 +35,15 @@ private:
             return pos->key() != term.key();
         });
         assert(pos != subseq_end);
-        *pos = std::reduce(std::next(pos),
-                           subseq_end,
-                           *pos,
-                           [](const term_type& lhs, const term_type& rhs) -> term_type {
-                               assert(keys_equivalent(lhs.key(), rhs.key()));
-                               auto un = lhs.intersection(rhs);
-                               assert(un);
-                               return *un;
-                           });
+        *pos = std::accumulate(std::next(pos),
+                               subseq_end,
+                               *pos,
+                               [](const term_type& lhs, const term_type& rhs) -> term_type {
+                                   assert(keys_equivalent(lhs.key(), rhs.key()));
+                                   auto un = lhs.intersection(rhs);
+                                   assert(un);
+                                   return *un;
+                               });
         return _terms.erase(std::next(pos), subseq_end);
     }
 
