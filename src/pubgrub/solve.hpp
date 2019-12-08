@@ -15,8 +15,11 @@
 namespace pubgrub {
 
 // clang-format off
-template <typename Provider, requirement Req>
-concept provider = requires(const Provider provider, const Req requirement) {
+template <typename Provider, typename Req>
+concept provider =
+    requirement<Req>
+    &&
+requires(const Provider provider, const Req requirement) {
     { provider.best_candidate(requirement) } -> detail::boolean;
     { *provider.best_candidate(requirement) } -> detail::convertible_to<const Req&>;
     { provider.requirements_of(requirement) } -> detail::range_of<Req>;
