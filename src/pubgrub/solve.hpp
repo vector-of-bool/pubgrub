@@ -157,14 +157,13 @@ struct solver {
             const ic_type& new_ic = ics.record(
                 ic_type{{term_type{*cand_req}, term_type{std::move(req), false}}, alloc});
             assert(new_ic.terms().size() == 2);
-            found_conflict = found_conflict || std::all_of(
-                new_ic.terms().cbegin(),
-                new_ic.terms().cend(),
-                [&](const term_type& ic_term) {
-                    return ic_term.key() == key_of(*cand_req)
-                        || sln.satisfies(ic_term);
-                }
-            );
+            found_conflict = found_conflict
+                || std::all_of(new_ic.terms().cbegin(),
+                               new_ic.terms().cend(),
+                               [&](const term_type& ic_term) {
+                                   return ic_term.key() == key_of(*cand_req)
+                                       || sln.satisfies(ic_term);
+                               });
         }
 
         if (!found_conflict) {

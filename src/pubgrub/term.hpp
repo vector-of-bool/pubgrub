@@ -3,8 +3,8 @@
 #include <pubgrub/concepts.hpp>
 
 #include <cassert>
-#include <ostream>
 #include <optional>
+#include <ostream>
 
 namespace pubgrub {
 
