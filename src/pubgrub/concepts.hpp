@@ -48,8 +48,8 @@ concept input_iterator = requires(Iter iter, const Iter c_iter) {
 template <input_iterator Iter>
 using value_type_t = typename std::iterator_traits<Iter>::value_type;
 
-template <input_iterator Iter, typename Type>
-concept iterator_of = convertible_to<value_type_t<Iter>, Type>;
+template <typename Iter, typename Type>
+concept iterator_of = input_iterator<Iter> && convertible_to<value_type_t<Iter>, Type>;
 
 template <typename R>
 concept range = requires(R range) {
@@ -63,14 +63,17 @@ using iterator_type_t = std::decay_t<decltype(std::begin(std::declval<R>()))>;
 template <range R>
 using range_value_type_t = value_type_t<iterator_type_t<R>>;
 
-template <range R, typename T>
-concept range_of = same_as<range_value_type_t<R>, T>;
+template <typename R, typename T>
+concept range_of = range<R> && same_as<range_value_type_t<R>, T>;
 
 template <typename T>
 concept copyable = std::is_copy_constructible_v<T> && std::is_copy_assignable_v<T>;
 
-template <boolean Opt, typename Type>
-concept optional_like = requires(const Opt what) {
+template <typename Opt, typename Type>
+concept optional_like =
+    boolean<Opt>
+    &&
+requires(const Opt what) {
     { *what } -> convertible_to<Type>;
 };
 
@@ -86,8 +89,14 @@ concept key =
 
 template <typename T>
 concept keyed = requires(const T item) {
-    { &T::key };
-    { std::invoke(&T::key, item) } -> key;
+    // As of writing, MSVC doesn't fully support the compute expression that we'd
+    // like:
+    /// { std::invoke(&T::key) } -> key;
+    { item.key };
+    requires key<decltype(item.key)>;
+} || requires(const T item) {
+    { item.key() };
+    requires key<decltype(item.key())>;
 };
 
 template <keyed K>
@@ -107,8 +116,11 @@ concept set = requires(const T s) {
     { s.difference(s) } -> detail::same_as<T>;
 };
 
-template <keyed T>
-concept requirement = requires(const T req) {
+template <typename T>
+concept requirement =
+    keyed<T>
+    &&
+requires(const T req) {
     { req.implied_by(req) } -> detail::boolean;
     { req.excludes(req) } -> detail::boolean;
     { req.intersection(req) } -> detail::optional_like<T>;
@@ -125,11 +137,15 @@ bool keys_equivalent(const K& left, const K& right) noexcept {
     }
 }
 
-template <detail::input_iterator Iter>
-concept requirement_iterator = requirement<detail::value_type_t<Iter>>;
+template <typename Iter>
+concept requirement_iterator =
+    detail::input_iterator<Iter>
+    && requirement<detail::value_type_t<Iter>>;
 
-template <detail::range R>
-concept requirement_range = requirement_iterator<detail::iterator_type_t<R>>;
+template <typename R>
+concept requirement_range =
+    detail::range<R>
+    && requirement_iterator<detail::iterator_type_t<R>>;
 
 // clang-format on
 
