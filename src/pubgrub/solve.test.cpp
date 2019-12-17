@@ -304,3 +304,41 @@ TEST_CASE("Advanced backtracking") {
     auto sln = pubgrub::solve(test.roots, test.repo);
     CHECK(sln == test.expected_sln);
 }
+
+TEST_CASE("Unsolvable") {
+    const solve_case& test = GENERATE(Catch::Generators::values<solve_case>({
+        test_case("No version matching direct requirement",
+                  repo(pkg("foo", 200, {}), pkg("foo", 213, {})),
+                  reqs(req("foo", {100, 200})),
+                  sln()),
+        test_case("No version of shared requirement matching combined constraints",
+                  repo(pkg("foo", 100, {req("shared", {200, 300})}),
+                       pkg("bar", 100, {req("shared", {290, 400})}),
+                       pkg("shared", 250, {}),
+                       pkg("shared", 350, {})),
+                  reqs(req("foo", {0, 9999}), req("bar", {0, 9999})),
+                  sln()),
+        test_case("Disjoin constraints fail",
+                  repo(pkg("foo", 100, {req("shared", {0, 201})}),
+                       pkg("bar", 100, {req("shared", {301, 999})}),
+                       pkg("shared", 200, {}),
+                       pkg("shared", 400, {})),
+                  reqs(req("foo", {100, 101}), req("bar", {100, 101})),
+                  sln()),
+        test_case("Disjoint root constraints",
+                  repo(pkg("foo", 100, {}), pkg("foo", 200, {})),
+                  reqs(req("foo", {100, 101}), req("foo", {200, 201})),
+                  sln()),
+        test_case("Unsolvable",
+                  repo(pkg("a", 100, {req("b", {100, 101})}),
+                       pkg("a", 200, {req("b", {200, 201})}),
+                       pkg("b", 100, {req("a", {200, 201})}),
+                       pkg("b", 200, {req("a", {100, 101})})),
+                  reqs(req("a", {0, 999}), req("b", {0, 999})),
+                  sln()),
+    }));
+
+    INFO("Checking unsolvable case: " << test.name);
+    using exception_type = pubgrub::failure_type_t<pubgrub::test::simple_req>;
+    CHECK_THROWS_AS(pubgrub::solve(test.roots, test.repo), exception_type);
+}
