@@ -3,9 +3,11 @@
 #include <pubgrub/concepts.hpp>
 #include <pubgrub/term.hpp>
 
+#include <deque>
 #include <initializer_list>
 #include <numeric>
 #include <ostream>
+#include <variant>
 
 namespace pubgrub {
 
@@ -15,10 +17,21 @@ public:
     using term_type           = term<Requirement>;
     using allocator_type      = Allocator;
     using term_allocator_type = detail::rebind_alloc_t<allocator_type, term_type>;
-    using term_vec            = std::vector<term_type, term_allocator_type>;
+    using term_vec            = std::deque<term_type, term_allocator_type>;
+
+    struct root_cause {};
+    struct speculation_cause {};
+    struct unavailable_cause {};
+    struct dependency_cause {};
+    struct conflict_cause {
+        const incompatibility& left;
+        const incompatibility& right;
+    };
+    using cause_type = std::variant<root_cause, unavailable_cause, dependency_cause, conflict_cause>;
 
 private:
-    term_vec _terms;
+    term_vec   _terms;
+    cause_type _cause;
 
     void _coalesce() noexcept {
         std::sort(_terms.begin(), _terms.end(), [](const auto& lhs, const auto& rhs) {
@@ -48,35 +61,26 @@ private:
     }
 
 public:
-    incompatibility() = default;
+    incompatibility()                       = default;
+    incompatibility(const incompatibility&) = delete;
+    incompatibility& operator=(const incompatibility&) = delete;
 
-    template <detail::same_as<allocator_type> AllocArg>
-    explicit incompatibility(AllocArg alloc)
-        : _terms(term_allocator_type(alloc)) {}
+    incompatibility(std::initializer_list<term_type> terms, allocator_type alloc, cause_type cause)
+        : incompatibility(terms.begin(), terms.end(), term_allocator_type(alloc), cause) {}
 
-    incompatibility(std::initializer_list<term_type> terms)
-        : incompatibility(terms.begin(), terms.end()) {}
-
-    incompatibility(std::initializer_list<term_type> terms, allocator_type alloc)
-        : incompatibility(terms.begin(), terms.end(), alloc) {}
-
-    template <detail::decays_to<term_vec> VecArg>
-    explicit incompatibility(VecArg&& arg)
-        : _terms(std::forward<VecArg>(arg)) {
-        _coalesce();
-    }
+    template <detail::range_of<term_type> VecArg>
+    explicit incompatibility(VecArg&& arg, allocator_type alloc, cause_type cause)
+        : incompatibility(arg.begin(), arg.end(), alloc, cause) {}
 
     template <detail::iterator_of<term_type> Iter>
-    incompatibility(Iter it, Iter stop)
-        : incompatibility(it, stop, allocator_type()) {}
-
-    template <detail::iterator_of<term_type> Iter>
-    incompatibility(Iter it, Iter stop, allocator_type alloc)
-        : _terms(it, stop, alloc) {
+    incompatibility(Iter it, Iter stop, allocator_type alloc, cause_type c)
+        : _terms(it, stop, alloc)
+        , _cause(c) {
         _coalesce();
     }
 
     const term_vec& terms() const noexcept { return _terms; }
+    const cause_type& cause() const noexcept { return _cause; }
 
     friend std::ostream& operator<<(std::ostream& out, const incompatibility& ic) noexcept {
         out << "{";

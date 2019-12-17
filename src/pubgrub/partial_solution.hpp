@@ -15,10 +15,6 @@
 
 namespace pubgrub {
 
-class no_solution : public std::runtime_error {
-    using runtime_error::runtime_error;
-};
-
 template <requirement Req, typename Allocator = std::allocator<Req>>
 class partial_solution {
 public:
@@ -190,8 +186,15 @@ public:
         std::terminate();
     }
 
+    struct backtrack_info {
+        const term_type&         term;
+        const assignment&        satisfier;
+        const std::size_t        prev_sat_level;
+        std::optional<term_type> difference;
+    };
+
     template <detail::range_of<term_type> Terms>
-    auto build_backtrack_info_2(const Terms& ts) const {
+    std::optional<backtrack_info> build_backtrack_info_2(const Terms& ts) const {
         const term_type*         most_recent_term      = nullptr;
         const assignment*        most_recent_satisfier = nullptr;
         std::optional<term_type> difference;
@@ -223,24 +226,17 @@ public:
             }
         }
 
-        if (!most_recent_satisfier) {
-            throw no_solution(
-                "There was no solution for the dependencies provided. The solver implementation is "
-                "still too young to have implemented a good backtrace of the failure. Sorry...");
+        if (most_recent_satisfier) {
+            struct info {};
+            assert(most_recent_term);
+            assert(most_recent_satisfier);
+            return backtrack_info{*most_recent_term,
+                                  *most_recent_satisfier,
+                                  previous_satisfier_level,
+                                  std::move(difference)};
+        } else {
+            return std::nullopt;
         }
-
-        struct info {
-            const term_type&         term;
-            const assignment&        satisfier;
-            const std::size_t        prev_sat_level;
-            std::optional<term_type> difference;
-        };
-        assert(most_recent_term);
-        assert(most_recent_satisfier);
-        return info{*most_recent_term,
-                    *most_recent_satisfier,
-                    previous_satisfier_level,
-                    std::move(difference)};
     }
 };
 

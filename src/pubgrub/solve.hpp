@@ -8,6 +8,7 @@
 #include <deque>
 #include <initializer_list>
 #include <iostream>
+#include <map>
 #include <set>
 #include <variant>
 #include <vector>
@@ -25,6 +26,21 @@ requires(const Provider provider, const Req requirement) {
     { provider.requirements_of(requirement) } -> detail::range_of<Req>;
 };
 // clang-format on
+
+class no_solution_base : public std::runtime_error {
+public:
+    using runtime_error::runtime_error;
+};
+
+template <typename IC>
+class no_solution : public no_solution_base {
+    std::deque<IC> _incompats;
+
+public:
+    explicit no_solution(std::deque<IC>&& ics)
+        : no_solution_base("Dependency resolution failed")
+        , _incompats(std::move(ics)) {}
+};
 
 namespace detail {
 
@@ -70,12 +86,46 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
         });
     }
 
+    std::map<const ic_type*, int> _derivation_counter{_alloc};
+
+    void _build_derivation_counts(const ic_type& ic) noexcept {
+        auto it = _derivation_counter.try_emplace(&ic, 0).first;
+        it->second++;
+        const auto& cause    = it->first->cause();
+        auto        conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
+        if (conflict) {
+            _build_derivation_counts(conflict->left);
+            _build_derivation_counts(conflict->right);
+        }
+    }
+
+    const ic_type& _add_ic_to_err(std::deque<ic_type>& ics, const ic_type& ic) noexcept {
+        auto cause    = ic.cause();
+        auto conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
+        if (conflict) {
+            const ic_type& left  = _add_ic_to_err(ics, conflict->left);
+            const ic_type& right = _add_ic_to_err(ics, conflict->right);
+            return ics.emplace_back(ic.terms(),
+                                    _alloc,
+                                    typename ic_type::conflict_cause{left, right});
+        } else {
+            return ics.emplace_back(ic.terms(), _alloc, ic.cause());
+        }
+    }
+
+    no_solution<ic_type> _build_exception(const ic_type& root) noexcept {
+        std::deque<ic_type> ics;
+        _add_ic_to_err(ics, root);
+        return no_solution(std::move(ics));
+    }
+
 public:
     explicit ic_record(allocator_type ac)
         : _alloc(ac) {}
 
-    const ic_type& record(ic_type&& ic) noexcept {
-        const ic_type& new_ic = _ics.emplace_back(std::move(ic));
+    template <typename... Args>
+    ic_type& emplace_record(Args&&... args) noexcept {
+        auto& new_ic = _ics.emplace_back(std::forward<Args>(args)...);
         for (const term_type& term : new_ic.terms()) {
             auto existing = _seq_for_key(term.key());
             if (existing == _by_key.end() || existing->key != term.key()) {
@@ -93,6 +143,8 @@ public:
         assert(seq_iter != _by_key.cend());
         return seq_iter->ics;
     }
+
+    [[noreturn]] void throw_failure(const ic_type& root) { throw _build_exception(root); }
 };
 
 template <requirement Req, provider<Req> P, typename Allocator>
@@ -125,7 +177,9 @@ struct solver {
     sln_type           sln{alloc};
 
     void preload_root(requirement_type req) noexcept {
-        ics.record(ic_type{{term_type{req, false}}, alloc});
+        ics.emplace_record(std::vector{term_type{req, false}},
+                           alloc,
+                           typename ic_type::root_cause{});
         changed.insert(key_of(req));
     }
 
@@ -137,7 +191,7 @@ struct solver {
         return sln.completed_solution();
     }
 
-    void speculate_one_decision() noexcept {
+    void speculate_one_decision() {
         const requirement_type* next_req = sln.next_unsatisfied_term();
         if (!next_req) {
             return;
@@ -146,7 +200,9 @@ struct solver {
         // Find the best candidate package for the term
         const auto& cand_req = provider.best_candidate(*next_req);
         if (!cand_req) {
-            ics.record(ic_type{{term_type{*next_req, true}}, alloc});
+            ics.emplace_record(std::vector{term_type{*next_req, true}},
+                               alloc,
+                               typename ic_type::unavailable_cause{});
             changed.insert(key_of(*next_req));
             return;
         }
@@ -154,8 +210,14 @@ struct solver {
         auto&& cand_reqs      = provider.requirements_of(*cand_req);
         bool   found_conflict = false;
         for (requirement_type req : cand_reqs) {
-            const ic_type& new_ic = ics.record(
-                ic_type{{term_type{*cand_req}, term_type{std::move(req), false}}, alloc});
+            if (key_of(req) == key_of(*cand_req)) {
+                throw std::runtime_error("Package cannot depend on itself.");
+            }
+            const ic_type& new_ic
+                = ics.emplace_record(std::vector{term_type{*cand_req},
+                                                 term_type{std::move(req), false}},
+                                     alloc,
+                                     typename ic_type::dependency_cause{});
             assert(new_ic.terms().size() == 2);
             found_conflict = found_conflict
                 || std::all_of(new_ic.terms().cbegin(),
@@ -235,19 +297,18 @@ struct solver {
         return almost_conflict{*unsat_term};
     }
 
-    ic_type resolve_conflict(ic_type ic) {
-        bool ic_changed = false;
+    const ic_type& resolve_conflict(std::reference_wrapper<const ic_type> ic_) {
         while (true) {
-            // auto&& satisfier                        = *sln.first_satisfier_of(ic.terms());
-            // auto prev_sat_level = sln.first_satisfier_of(ic.terms(), satisfier)->decision_level;
-            // const auto& [satisfier, prev_sat_level] = sln.build_backtrack_info(ic.terms());
-            const auto& [term, satisfier, prev_sat_level, difference]
-                = sln.build_backtrack_info_2(ic.terms());
+            const ic_type& ic = ic_;
+            const auto& opt_bt_info = sln.build_backtrack_info_2(ic.terms());
+            if (!opt_bt_info) {
+                // There is nowhere left to backtrack to: There is no possible
+                // solution!
+                ics.throw_failure(ic);
+            }
+            const auto& [term, satisfier, prev_sat_level, difference] = *opt_bt_info;
             if (satisfier.is_decision() || prev_sat_level < satisfier.decision_level) {
                 sln.backtrack_to(prev_sat_level);
-                if (ic_changed) {
-                    ics.record(ic_type(ic));
-                }
                 return ic;
             } else {
                 assert(satisfier.cause);
@@ -268,14 +329,11 @@ struct solver {
                 assert(std::all_of(new_terms.cbegin(),
                                    new_terms.cend(),
                                    [&](const term_type& term) { return sln.satisfies(term); }));
-                auto ic2 = ic_type(new_terms);
-                assert(!std::equal(ic.terms().begin(),
-                                   ic.terms().end(),
-                                   ic2.terms().begin(),
-                                   ic2.terms().end()));
-                ic         = ic_type(std::move(new_terms));
-                ic_changed = true;
-                // assert(std::holds_alternative<conflict>(check_conflict(ic)));
+
+                ic_ = ics.emplace_record(std::move(new_terms),
+                                         alloc,
+                                         typename ic_type::conflict_cause{ic, *satisfier.cause});
+                assert(std::holds_alternative<conflict>(check_conflict(ic_)));
             }
         }
     }
@@ -329,5 +387,8 @@ template <requirement Req, provider<Req> P>
 decltype(auto) solve(std::initializer_list<term<Req>> il, P&& p) {
     return solve(il.begin(), il.end(), p);
 }
+
+template <requirement Req>
+using failure_type_t = no_solution<incompatibility<Req>>;
 
 }  // namespace pubgrub
