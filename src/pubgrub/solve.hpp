@@ -196,12 +196,13 @@ struct solver {
             sln.record_derivation(almost->term.inverse(), ic);
             changed.insert(almost->term.key());
         } else if (std::holds_alternative<conflict>(res)) {
-            ic_type conflict_cause = resolve_conflict(ic);
-            auto    res2           = check_conflict(conflict_cause);
-            auto    almost         = std::get_if<almost_conflict>(&res2);
+            const ic_type& conflict_cause = resolve_conflict(ic);
+            auto           res2           = check_conflict(conflict_cause);
+            auto           almost         = std::get_if<almost_conflict>(&res2);
             assert(almost && "Conflict resolution entered an invalid state");
             changed.clear();
-            sln.record_derivation(almost->term.inverse(), ic);
+            sln.record_derivation(almost->term.inverse(), conflict_cause);
+            changed.clear();
             changed.insert(almost->term.key());
             return false;
         } else {
