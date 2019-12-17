@@ -3,6 +3,7 @@
 #include <pubgrub/concepts.hpp>
 #include <pubgrub/term.hpp>
 
+#include <algorithm>
 #include <deque>
 #include <initializer_list>
 #include <numeric>
@@ -27,7 +28,8 @@ public:
         const incompatibility& left;
         const incompatibility& right;
     };
-    using cause_type = std::variant<root_cause, unavailable_cause, dependency_cause, conflict_cause>;
+    using cause_type
+        = std::variant<root_cause, unavailable_cause, dependency_cause, conflict_cause>;
 
 private:
     term_vec   _terms;
@@ -79,7 +81,7 @@ public:
         _coalesce();
     }
 
-    const term_vec& terms() const noexcept { return _terms; }
+    const term_vec&   terms() const noexcept { return _terms; }
     const cause_type& cause() const noexcept { return _cause; }
 
     friend std::ostream& operator<<(std::ostream& out, const incompatibility& ic) noexcept {
