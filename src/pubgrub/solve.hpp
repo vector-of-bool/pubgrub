@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pubgrub/concepts.hpp>
+#include <pubgrub/failure.hpp>
 #include <pubgrub/incompatibility.hpp>
 #include <pubgrub/partial_solution.hpp>
 #include <pubgrub/term.hpp>
@@ -8,7 +9,6 @@
 #include <deque>
 #include <initializer_list>
 #include <iostream>
-#include <map>
 #include <set>
 #include <variant>
 #include <vector>
@@ -26,21 +26,6 @@ requires(const Provider provider, const Req requirement) {
     { provider.requirements_of(requirement) } -> detail::range_of<Req>;
 };
 // clang-format on
-
-class no_solution_base : public std::runtime_error {
-public:
-    using runtime_error::runtime_error;
-};
-
-template <typename IC>
-class no_solution : public no_solution_base {
-    std::deque<IC> _incompats;
-
-public:
-    explicit no_solution(std::deque<IC>&& ics)
-        : no_solution_base("Dependency resolution failed")
-        , _incompats(std::move(ics)) {}
-};
 
 namespace detail {
 
@@ -86,19 +71,6 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
         });
     }
 
-    std::map<const ic_type*, int> _derivation_counter{_alloc};
-
-    void _build_derivation_counts(const ic_type& ic) noexcept {
-        auto it = _derivation_counter.try_emplace(&ic, 0).first;
-        it->second++;
-        const auto& cause    = it->first->cause();
-        auto        conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
-        if (conflict) {
-            _build_derivation_counts(conflict->left);
-            _build_derivation_counts(conflict->right);
-        }
-    }
-
     const ic_type& _add_ic_to_err(std::deque<ic_type>& ics, const ic_type& ic) noexcept {
         auto cause    = ic.cause();
         auto conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
@@ -113,10 +85,10 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
         }
     }
 
-    no_solution<ic_type> _build_exception(const ic_type& root) noexcept {
+    unsolvable_failure<ic_type> _build_exception(const ic_type& root) noexcept {
         std::deque<ic_type> ics;
         _add_ic_to_err(ics, root);
-        return no_solution(std::move(ics));
+        return unsolvable_failure<ic_type>(std::move(ics));
     }
 
 public:
@@ -299,8 +271,8 @@ struct solver {
 
     const ic_type& resolve_conflict(std::reference_wrapper<const ic_type> ic_) {
         while (true) {
-            const ic_type& ic = ic_;
-            const auto& opt_bt_info = sln.build_backtrack_info_2(ic.terms());
+            const ic_type& ic          = ic_;
+            const auto&    opt_bt_info = sln.build_backtrack_info_2(ic.terms());
             if (!opt_bt_info) {
                 // There is nowhere left to backtrack to: There is no possible
                 // solution!
@@ -387,8 +359,5 @@ template <requirement Req, provider<Req> P>
 decltype(auto) solve(std::initializer_list<term<Req>> il, P&& p) {
     return solve(il.begin(), il.end(), p);
 }
-
-template <requirement Req>
-using failure_type_t = no_solution<incompatibility<Req>>;
 
 }  // namespace pubgrub

@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 #include <algorithm>
+#include <sstream>
 
 using test_term = pubgrub::term<pubgrub::test::simple_req>;
 
@@ -339,6 +340,70 @@ TEST_CASE("Unsolvable") {
     }));
 
     INFO("Checking unsolvable case: " << test.name);
-    using exception_type = pubgrub::failure_type_t<pubgrub::test::simple_req>;
-    CHECK_THROWS_AS(pubgrub::solve(test.roots, test.repo), exception_type);
+    using exception_type = pubgrub::solve_failure_type_t<pubgrub::test::simple_req>;
+    try {
+        pubgrub::solve(test.roots, test.repo);
+        FAIL("Expected a solver failure");
+    } catch (const exception_type& fail) {
+        pubgrub::generate_error_report(fail, [&](auto&&) {});
+    }
+}
+
+struct explain_handler {
+    std::stringstream message;
+
+    void say(pubgrub::explain::dependency<pubgrub::test::simple_req> dep) {
+        message << dep.dependent << " requires " << dep.dependency;
+    }
+
+    void say(pubgrub::explain::disallowed<pubgrub::test::simple_req> dep) {
+        message << dep.requirement << " is not allowed";
+    }
+
+    void say(pubgrub::explain::unavailable<pubgrub::test::simple_req> un) {
+        message << un.requirement << " is not available";
+    }
+
+    void say(pubgrub::explain::needed<pubgrub::test::simple_req> need) {
+        message << need.requirement << " is needed";
+    }
+
+    void say(pubgrub::explain::conflict<pubgrub::test::simple_req> conf) {
+        message << conf.a << " conflicts with " << conf.b;
+    }
+
+    void say(pubgrub::explain::no_solution) { message << "There is no solution"; }
+
+    void operator()(pubgrub::explain::separator) { message << '\n'; }
+
+    template <typename What>
+    void operator()(pubgrub::explain::conclusion<What> c) {
+        message << "Thus: ";
+        say(c.value);
+        message << '\n';
+    }
+
+    template <typename What>
+    void operator()(pubgrub::explain::premise<What> c) {
+        message << "Known: ";
+        say(c.value);
+        message << '\n';
+    }
+};
+
+TEST_CASE("Explain 1") {
+    auto test = test_case("No version matching direct requirement",
+                          repo(pkg("foo", 200, {}), pkg("foo", 213, {})),
+                          reqs(req("foo", {100, 200})),
+                          sln());
+    try {
+        pubgrub::solve(test.roots, test.repo);
+        FAIL("Expected a failure");
+    } catch (const pubgrub::solve_failure_type_t<pubgrub::test::simple_req>& fail) {
+        explain_handler ex;
+        pubgrub::generate_error_report(fail, ex);
+        CHECK(ex.message.str() == "Known: foo [100, 200) is not available\n"
+                                  "Known: foo [100, 200) is needed\n"
+                                  "Thus: There is no solution\n");
+    }
 }
