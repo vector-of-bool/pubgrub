@@ -85,6 +85,24 @@ struct conclusion {
     const Inner& value;
 };
 
+// clang-format off
+template <typename T, typename Requirement>
+concept handler = requires(T h) {
+    h(std::declval<conclusion<no_solution>>());
+    h(std::declval<conclusion<dependency<Requirement>>>());
+    h(std::declval<conclusion<conflict<Requirement>>>());
+    h(std::declval<conclusion<disallowed<Requirement>>>());
+    h(std::declval<conclusion<unavailable<Requirement>>>());
+    h(std::declval<conclusion<needed<Requirement>>>());
+    h(separator());
+    h(std::declval<premise<dependency<Requirement>>>());
+    h(std::declval<premise<conflict<Requirement>>>());
+    h(std::declval<premise<disallowed<Requirement>>>());
+    h(std::declval<premise<unavailable<Requirement>>>());
+    h(std::declval<premise<needed<Requirement>>>());
+};
+// clang-format on
+
 }  // namespace explain
 
 namespace detail {
@@ -248,7 +266,7 @@ struct failure_writer {
 
 }  // namespace detail
 
-template <typename IC, typename Handler>
+template <typename IC, explain::handler<typename IC::term_type::requirement_type> Handler>
 void generate_error_report(const unsolvable_failure<IC>& fail, Handler&& h) {
     detail::failure_writer<IC, Handler> f{fail, h};
     f.generate();
