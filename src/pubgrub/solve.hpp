@@ -7,6 +7,7 @@
 #include <pubgrub/term.hpp>
 
 #include <deque>
+#include <list>
 #include <initializer_list>
 #include <iostream>
 #include <set>
@@ -54,24 +55,24 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
 
     allocator_type _alloc;
 
-    using deque_type = std::deque<ic_type, rebind_alloc_t<ic_type>>;
-    deque_type _ics{_alloc};
+    using list_type = std::list<ic_type, rebind_alloc_t<ic_type>>;
+    list_type _ics = list_type(_alloc);
 
     using ic_by_key_seq_vec = std::vector<ic_by_key_seq, rebind_alloc_t<ic_by_key_seq>>;
     ic_by_key_seq_vec _by_key{_alloc};
 
-    typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key) const noexcept {
+    typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key_) const noexcept {
         return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key;
+            return check.key < key_;
         });
     }
-    typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key) noexcept {
+    typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key_) noexcept {
         return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key;
+            return check.key < key_;
         });
     }
 
-    const ic_type& _add_ic_to_err(std::deque<ic_type>& ics, const ic_type& ic) noexcept {
+    const ic_type& _add_ic_to_err(std::list<ic_type>& ics, const ic_type& ic) noexcept {
         auto cause    = ic.cause();
         auto conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
         if (conflict) {
@@ -86,7 +87,7 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
     }
 
     unsolvable_failure<ic_type> _build_exception(const ic_type& root) noexcept {
-        std::deque<ic_type> ics;
+        std::list<ic_type> ics;
         _add_ic_to_err(ics, root);
         return unsolvable_failure<ic_type>(std::move(ics));
     }
@@ -110,8 +111,8 @@ public:
 
     const auto& all() const noexcept { return _ics; }
 
-    const auto& for_name(const key_type& key) const noexcept {
-        auto seq_iter = _seq_for_key(key);
+    const auto& for_name(const key_type& k) const noexcept {
+        auto seq_iter = _seq_for_key(k);
         assert(seq_iter != _by_key.cend());
         return seq_iter->ics;
     }
@@ -214,8 +215,8 @@ struct solver {
         }
     }
 
-    void propagate_one(const key_type& key) {
-        auto ics_for_name = ics.for_name(key);
+    void propagate_one(const key_type& k) {
+        auto ics_for_name = ics.for_name(k);
         for (const ic_type& ic : ics_for_name) {
             if (!propagate_ic(ic)) {
                 break;
@@ -232,12 +233,11 @@ struct solver {
         } else if (std::holds_alternative<conflict>(res)) {
             const ic_type& conflict_cause = resolve_conflict(ic);
             auto           res2           = check_conflict(conflict_cause);
-            auto           almost         = std::get_if<almost_conflict>(&res2);
-            assert(almost && "Conflict resolution entered an invalid state");
+            auto           almost2        = std::get_if<almost_conflict>(&res2);
+            assert(almost2 && "Conflict resolution entered an invalid state");
+            sln.record_derivation(almost2->term.inverse(), conflict_cause);
             changed.clear();
-            sln.record_derivation(almost->term.inverse(), conflict_cause);
-            changed.clear();
-            changed.insert(almost->term.key());
+            changed.insert(almost2->term.key());
             return false;
         } else {
             assert(std::holds_alternative<no_conflict>(res));

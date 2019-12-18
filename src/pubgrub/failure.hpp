@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <list>
 #include <map>
 #include <stdexcept>
 #include <utility>
@@ -21,10 +22,10 @@ public:
 
 template <typename IC>
 class unsolvable_failure : public unsolvable_failure_base {
-    std::deque<IC> _incompats;
+    std::list<IC> _incompats;
 
 public:
-    explicit unsolvable_failure(std::deque<IC>&& ics)
+    explicit unsolvable_failure(std::list<IC>&& ics)
         : unsolvable_failure_base("Dependency resolution failed")
         , _incompats(std::move(ics)) {}
 
@@ -97,7 +98,7 @@ struct failure_writer {
 
     Handler& handle;
 
-    const std::deque<ic_type>& ics = failure.incompatibilities();
+    const std::list<ic_type>& ics = failure.incompatibilities();
 
     [[noreturn]] void _die() {
         assert(false && "We hit an unknown edge case while generating the dependency resolution error report. Please report this as a bug!");

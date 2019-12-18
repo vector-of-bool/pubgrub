@@ -44,6 +44,7 @@ struct test_repo {
             }
         }
         assert(false && "Impossible?");
+        std::terminate();
     }
 };
 

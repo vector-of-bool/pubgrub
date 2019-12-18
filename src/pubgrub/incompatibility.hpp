@@ -18,7 +18,7 @@ public:
     using term_type           = term<Requirement>;
     using allocator_type      = Allocator;
     using term_allocator_type = detail::rebind_alloc_t<allocator_type, term_type>;
-    using term_vec            = std::deque<term_type, term_allocator_type>;
+    using term_vec            = std::vector<term_type, term_allocator_type>;
 
     struct root_cause {};
     struct speculation_cause {};
@@ -63,9 +63,23 @@ private:
     }
 
 public:
-    incompatibility()                       = default;
-    incompatibility(const incompatibility&) = delete;
+    incompatibility()        = default;
     incompatibility& operator=(const incompatibility&) = delete;
+#ifdef _MSC_VER
+    incompatibility(const incompatibility&) {
+        // MSVC 19.23 seems to have an issue with instantiating the copy constructor of std::list
+        // unconditionally, despite the code never making use of it. This will then cause a
+        // reference to the deleted `incompatibility` copy constructor, but we don't ever actually
+        // use it, and we don't want it to ever happen. Workaround: Just defined a copy constructor
+        // that asserts and terminates. There should never be a code path that actually executes
+        // this copy constructor, but put a helpful assertion message just for safety's sake.
+        assert(false
+               && "An incompatibility was copied. This isn't supposed to happen. This is a bug.");
+        std::terminate();
+    }
+#else
+    incompatibility(const incompatibility&) = delete;
+#endif
 
     incompatibility(std::initializer_list<term_type> terms, allocator_type alloc, cause_type cause)
         : incompatibility(terms.begin(), terms.end(), term_allocator_type(alloc), cause) {}
