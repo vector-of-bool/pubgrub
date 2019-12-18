@@ -113,7 +113,6 @@ public:
     }
 
     void record_decision(term_type term) noexcept {
-
         [[maybe_unused]] const auto did_insert = _decided_keys.emplace(term.key()).second;
         assert(did_insert && "More than one decision recorded for a single item");
 
@@ -146,8 +145,6 @@ public:
             return nullptr;
         }
     }
-
-    using assignment_iterator = typename assignment_vec::const_iterator;
 
     void backtrack_to(std::size_t decision_level) noexcept {
         while (_assignments.back().decision_level > decision_level) {
@@ -194,7 +191,7 @@ public:
     };
 
     template <detail::range_of<term_type> Terms>
-    std::optional<backtrack_info> build_backtrack_info_2(const Terms& ts) const {
+    std::optional<backtrack_info> build_backtrack_info(const Terms& ts) const {
         const term_type*         most_recent_term      = nullptr;
         const assignment*        most_recent_satisfier = nullptr;
         std::optional<term_type> difference;

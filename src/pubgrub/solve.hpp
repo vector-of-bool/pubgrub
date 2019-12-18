@@ -56,7 +56,7 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
     allocator_type _alloc;
 
     using list_type = std::list<ic_type, rebind_alloc_t<ic_type>>;
-    list_type _ics = list_type(_alloc);
+    list_type _ics{_alloc};
 
     using ic_by_key_seq_vec = std::vector<ic_by_key_seq, rebind_alloc_t<ic_by_key_seq>>;
     ic_by_key_seq_vec _by_key{_alloc};
@@ -272,7 +272,7 @@ struct solver {
     const ic_type& resolve_conflict(std::reference_wrapper<const ic_type> ic_) {
         while (true) {
             const ic_type& ic          = ic_;
-            const auto&    opt_bt_info = sln.build_backtrack_info_2(ic.terms());
+            const auto&    opt_bt_info = sln.build_backtrack_info(ic.terms());
             if (!opt_bt_info) {
                 // There is nowhere left to backtrack to: There is no possible
                 // solution!
