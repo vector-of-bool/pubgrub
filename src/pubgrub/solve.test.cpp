@@ -346,7 +346,7 @@ TEST_CASE("Unsolvable") {
         pubgrub::solve(test.roots, test.repo);
         FAIL("Expected a solver failure");
     } catch (const exception_type& fail) {
-        pubgrub::generate_error_report(fail, [&](auto&&) {});
+        pubgrub::generate_explaination(fail, [&](auto&&) {});
     }
 }
 
@@ -402,7 +402,7 @@ TEST_CASE("Explain 1") {
         FAIL("Expected a failure");
     } catch (const pubgrub::solve_failure_type_t<pubgrub::test::simple_req>& fail) {
         explain_handler ex;
-        pubgrub::generate_error_report(fail, ex);
+        pubgrub::generate_explaination(fail, ex);
         CHECK(ex.message.str() == "Known: foo [100, 200) is not available\n"
                                   "Known: foo [100, 200) is needed\n"
                                   "Thus: There is no solution\n");

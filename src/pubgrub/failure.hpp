@@ -267,7 +267,7 @@ struct failure_writer {
 }  // namespace detail
 
 template <typename IC, explain::handler<typename IC::term_type::requirement_type> Handler>
-void generate_error_report(const unsolvable_failure<IC>& fail, Handler&& h) {
+void generate_explaination(const unsolvable_failure<IC>& fail, Handler&& h) {
     detail::failure_writer<IC, Handler> f{fail, h};
     f.generate();
 }
