@@ -1,11 +1,13 @@
 #pragma once
 
 #include <pubgrub/concepts.hpp>
+#include <pubgrub/failure.hpp>
 #include <pubgrub/incompatibility.hpp>
 #include <pubgrub/partial_solution.hpp>
 #include <pubgrub/term.hpp>
 
 #include <deque>
+#include <list>
 #include <initializer_list>
 #include <iostream>
 #include <set>
@@ -53,29 +55,50 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
 
     allocator_type _alloc;
 
-    using deque_type = std::deque<ic_type, rebind_alloc_t<ic_type>>;
-    deque_type _ics{_alloc};
+    using list_type = std::list<ic_type, rebind_alloc_t<ic_type>>;
+    list_type _ics{_alloc};
 
     using ic_by_key_seq_vec = std::vector<ic_by_key_seq, rebind_alloc_t<ic_by_key_seq>>;
     ic_by_key_seq_vec _by_key{_alloc};
 
-    typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key) const noexcept {
+    typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key_) const noexcept {
         return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key;
+            return check.key < key_;
         });
     }
-    typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key) noexcept {
+    typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key_) noexcept {
         return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key;
+            return check.key < key_;
         });
+    }
+
+    const ic_type& _add_ic_to_err(std::list<ic_type>& ics, const ic_type& ic) noexcept {
+        auto cause    = ic.cause();
+        auto conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
+        if (conflict) {
+            const ic_type& left  = _add_ic_to_err(ics, conflict->left);
+            const ic_type& right = _add_ic_to_err(ics, conflict->right);
+            return ics.emplace_back(ic.terms(),
+                                    _alloc,
+                                    typename ic_type::conflict_cause{left, right});
+        } else {
+            return ics.emplace_back(ic.terms(), _alloc, ic.cause());
+        }
+    }
+
+    unsolvable_failure<ic_type> _build_exception(const ic_type& root) noexcept {
+        std::list<ic_type> ics;
+        _add_ic_to_err(ics, root);
+        return unsolvable_failure<ic_type>(std::move(ics));
     }
 
 public:
     explicit ic_record(allocator_type ac)
         : _alloc(ac) {}
 
-    const ic_type& record(ic_type&& ic) noexcept {
-        const ic_type& new_ic = _ics.emplace_back(std::move(ic));
+    template <typename... Args>
+    ic_type& emplace_record(Args&&... args) noexcept {
+        auto& new_ic = _ics.emplace_back(std::forward<Args>(args)...);
         for (const term_type& term : new_ic.terms()) {
             auto existing = _seq_for_key(term.key());
             if (existing == _by_key.end() || existing->key != term.key()) {
@@ -88,11 +111,13 @@ public:
 
     const auto& all() const noexcept { return _ics; }
 
-    const auto& for_name(const key_type& key) const noexcept {
-        auto seq_iter = _seq_for_key(key);
+    const auto& for_name(const key_type& k) const noexcept {
+        auto seq_iter = _seq_for_key(k);
         assert(seq_iter != _by_key.cend());
         return seq_iter->ics;
     }
+
+    [[noreturn]] void throw_failure(const ic_type& root) { throw _build_exception(root); }
 };
 
 template <requirement Req, provider<Req> P, typename Allocator>
@@ -125,7 +150,9 @@ struct solver {
     sln_type           sln{alloc};
 
     void preload_root(requirement_type req) noexcept {
-        ics.record(ic_type{{term_type{req, false}}, alloc});
+        ics.emplace_record(std::vector{term_type{req, false}},
+                           alloc,
+                           typename ic_type::root_cause{});
         changed.insert(key_of(req));
     }
 
@@ -137,7 +164,7 @@ struct solver {
         return sln.completed_solution();
     }
 
-    void speculate_one_decision() noexcept {
+    void speculate_one_decision() {
         const requirement_type* next_req = sln.next_unsatisfied_term();
         if (!next_req) {
             return;
@@ -146,7 +173,9 @@ struct solver {
         // Find the best candidate package for the term
         const auto& cand_req = provider.best_candidate(*next_req);
         if (!cand_req) {
-            ics.record(ic_type{{term_type{*next_req, true}}, alloc});
+            ics.emplace_record(std::vector{term_type{*next_req, true}},
+                               alloc,
+                               typename ic_type::unavailable_cause{});
             changed.insert(key_of(*next_req));
             return;
         }
@@ -154,8 +183,14 @@ struct solver {
         auto&& cand_reqs      = provider.requirements_of(*cand_req);
         bool   found_conflict = false;
         for (requirement_type req : cand_reqs) {
-            const ic_type& new_ic = ics.record(
-                ic_type{{term_type{*cand_req}, term_type{std::move(req), false}}, alloc});
+            if (key_of(req) == key_of(*cand_req)) {
+                throw std::runtime_error("Package cannot depend on itself.");
+            }
+            const ic_type& new_ic
+                = ics.emplace_record(std::vector{term_type{*cand_req},
+                                                 term_type{std::move(req), false}},
+                                     alloc,
+                                     typename ic_type::dependency_cause{});
             assert(new_ic.terms().size() == 2);
             found_conflict = found_conflict
                 || std::all_of(new_ic.terms().cbegin(),
@@ -180,8 +215,8 @@ struct solver {
         }
     }
 
-    void propagate_one(const key_type& key) {
-        auto ics_for_name = ics.for_name(key);
+    void propagate_one(const key_type& k) {
+        auto ics_for_name = ics.for_name(k);
         for (const ic_type& ic : ics_for_name) {
             if (!propagate_ic(ic)) {
                 break;
@@ -196,13 +231,13 @@ struct solver {
             sln.record_derivation(almost->term.inverse(), ic);
             changed.insert(almost->term.key());
         } else if (std::holds_alternative<conflict>(res)) {
-            ic_type conflict_cause = resolve_conflict(ic);
-            auto    res2           = check_conflict(conflict_cause);
-            auto    almost         = std::get_if<almost_conflict>(&res2);
-            assert(almost && "Conflict resolution entered an invalid state");
+            const ic_type& conflict_cause = resolve_conflict(ic);
+            auto           res2           = check_conflict(conflict_cause);
+            auto           almost2        = std::get_if<almost_conflict>(&res2);
+            assert(almost2 && "Conflict resolution entered an invalid state");
+            sln.record_derivation(almost2->term.inverse(), conflict_cause);
             changed.clear();
-            sln.record_derivation(almost->term.inverse(), ic);
-            changed.insert(almost->term.key());
+            changed.insert(almost2->term.key());
             return false;
         } else {
             assert(std::holds_alternative<no_conflict>(res));
@@ -234,19 +269,18 @@ struct solver {
         return almost_conflict{*unsat_term};
     }
 
-    ic_type resolve_conflict(ic_type ic) {
-        bool ic_changed = false;
+    const ic_type& resolve_conflict(std::reference_wrapper<const ic_type> ic_) {
         while (true) {
-            // auto&& satisfier                        = *sln.first_satisfier_of(ic.terms());
-            // auto prev_sat_level = sln.first_satisfier_of(ic.terms(), satisfier)->decision_level;
-            // const auto& [satisfier, prev_sat_level] = sln.build_backtrack_info(ic.terms());
-            const auto& [term, satisfier, prev_sat_level, difference]
-                = sln.build_backtrack_info_2(ic.terms());
+            const ic_type& ic          = ic_;
+            const auto&    opt_bt_info = sln.build_backtrack_info(ic.terms());
+            if (!opt_bt_info) {
+                // There is nowhere left to backtrack to: There is no possible
+                // solution!
+                ics.throw_failure(ic);
+            }
+            const auto& [term, satisfier, prev_sat_level, difference] = *opt_bt_info;
             if (satisfier.is_decision() || prev_sat_level < satisfier.decision_level) {
                 sln.backtrack_to(prev_sat_level);
-                if (ic_changed) {
-                    ics.record(ic_type(ic));
-                }
                 return ic;
             } else {
                 assert(satisfier.cause);
@@ -267,14 +301,11 @@ struct solver {
                 assert(std::all_of(new_terms.cbegin(),
                                    new_terms.cend(),
                                    [&](const term_type& term) { return sln.satisfies(term); }));
-                auto ic2 = ic_type(new_terms);
-                assert(!std::equal(ic.terms().begin(),
-                                   ic.terms().end(),
-                                   ic2.terms().begin(),
-                                   ic2.terms().end()));
-                ic         = ic_type(std::move(new_terms));
-                ic_changed = true;
-                // assert(std::holds_alternative<conflict>(check_conflict(ic)));
+
+                ic_ = ics.emplace_record(std::move(new_terms),
+                                         alloc,
+                                         typename ic_type::conflict_cause{ic, *satisfier.cause});
+                assert(std::holds_alternative<conflict>(check_conflict(ic_)));
             }
         }
     }

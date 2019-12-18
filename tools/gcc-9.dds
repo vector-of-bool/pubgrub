@@ -2,6 +2,6 @@ Compiler-ID: GNU
 C++-Version: C++17
 C-Compiler: gcc-9
 C++-Compiler: g++-9
-Flags: -fconcepts -Werror=return-type -D_GLIBCXX_DEBUG -fsanitize=address,undefined
-Link-Flags: -fsanitize=address,undefined
+Flags: -fconcepts -Werror=return-type -D_GLIBCXX_DEBUG
+Link-Flags:
 Debug: True
