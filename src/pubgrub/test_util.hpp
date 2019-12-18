@@ -5,6 +5,7 @@
 #include <pubgrub/term.hpp>
 
 #include <string>
+#include <optional>
 
 namespace pubgrub::test {
 

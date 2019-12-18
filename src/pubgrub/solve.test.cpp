@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 #include <algorithm>
+#include <sstream>
 
 using test_term = pubgrub::term<pubgrub::test::simple_req>;
 
@@ -43,6 +44,7 @@ struct test_repo {
             }
         }
         assert(false && "Impossible?");
+        std::terminate();
     }
 };
 
@@ -303,4 +305,106 @@ TEST_CASE("Advanced backtracking") {
     INFO("Checking solve case: " << test.name);
     auto sln = pubgrub::solve(test.roots, test.repo);
     CHECK(sln == test.expected_sln);
+}
+
+TEST_CASE("Unsolvable") {
+    const solve_case& test = GENERATE(Catch::Generators::values<solve_case>({
+        test_case("No version matching direct requirement",
+                  repo(pkg("foo", 200, {}), pkg("foo", 213, {})),
+                  reqs(req("foo", {100, 200})),
+                  sln()),
+        test_case("No version of shared requirement matching combined constraints",
+                  repo(pkg("foo", 100, {req("shared", {200, 300})}),
+                       pkg("bar", 100, {req("shared", {290, 400})}),
+                       pkg("shared", 250, {}),
+                       pkg("shared", 350, {})),
+                  reqs(req("foo", {0, 9999}), req("bar", {0, 9999})),
+                  sln()),
+        test_case("Disjoin constraints fail",
+                  repo(pkg("foo", 100, {req("shared", {0, 201})}),
+                       pkg("bar", 100, {req("shared", {301, 999})}),
+                       pkg("shared", 200, {}),
+                       pkg("shared", 400, {})),
+                  reqs(req("foo", {100, 101}), req("bar", {100, 101})),
+                  sln()),
+        test_case("Disjoint root constraints",
+                  repo(pkg("foo", 100, {}), pkg("foo", 200, {})),
+                  reqs(req("foo", {100, 101}), req("foo", {200, 201})),
+                  sln()),
+        test_case("Unsolvable",
+                  repo(pkg("a", 100, {req("b", {100, 101})}),
+                       pkg("a", 200, {req("b", {200, 201})}),
+                       pkg("b", 100, {req("a", {200, 201})}),
+                       pkg("b", 200, {req("a", {100, 101})})),
+                  reqs(req("a", {0, 999}), req("b", {0, 999})),
+                  sln()),
+    }));
+
+    INFO("Checking unsolvable case: " << test.name);
+    using exception_type = pubgrub::solve_failure_type_t<pubgrub::test::simple_req>;
+    try {
+        pubgrub::solve(test.roots, test.repo);
+        FAIL("Expected a solver failure");
+    } catch (const exception_type& fail) {
+        pubgrub::generate_explaination(fail, [&](auto&&) {});
+    }
+}
+
+struct explain_handler {
+    std::stringstream message;
+
+    void say(pubgrub::explain::dependency<pubgrub::test::simple_req> dep) {
+        message << dep.dependent << " requires " << dep.dependency;
+    }
+
+    void say(pubgrub::explain::disallowed<pubgrub::test::simple_req> dep) {
+        message << dep.requirement << " is not allowed";
+    }
+
+    void say(pubgrub::explain::unavailable<pubgrub::test::simple_req> un) {
+        message << un.requirement << " is not available";
+    }
+
+    void say(pubgrub::explain::needed<pubgrub::test::simple_req> need) {
+        message << need.requirement << " is needed";
+    }
+
+    void say(pubgrub::explain::conflict<pubgrub::test::simple_req> conf) {
+        message << conf.a << " conflicts with " << conf.b;
+    }
+
+    void say(pubgrub::explain::no_solution) { message << "There is no solution"; }
+
+    void operator()(pubgrub::explain::separator) { message << '\n'; }
+
+    template <typename What>
+    void operator()(pubgrub::explain::conclusion<What> c) {
+        message << "Thus: ";
+        say(c.value);
+        message << '\n';
+    }
+
+    template <typename What>
+    void operator()(pubgrub::explain::premise<What> c) {
+        message << "Known: ";
+        say(c.value);
+        message << '\n';
+    }
+};
+
+TEST_CASE("Explain 1") {
+    auto test = test_case("No version matching direct requirement",
+                          repo(pkg("foo", 200, {}), pkg("foo", 213, {})),
+                          reqs(req("foo", {100, 200})),
+                          sln());
+    try {
+        pubgrub::solve(test.roots, test.repo);
+        FAIL("Expected a failure");
+    } catch (const pubgrub::solve_failure_type_t<pubgrub::test::simple_req>& fail) {
+        explain_handler ex;
+        pubgrub::generate_explaination(fail, ex);
+        CHECK(ex.message.str() == "Known: foo [100, 200) is not available\n"
+                                  "Known: foo [100, 200) is needed\n"
+                                  "Thus: There is no solution\n");
+    }
 }

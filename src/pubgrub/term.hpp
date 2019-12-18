@@ -124,60 +124,7 @@ struct term {
     }
 
     std::optional<term> difference(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key())
-               && "Cannot perform set operations on terms of differing keys");
-        if (positive && other.positive) {
-            // Simple case.
-            if (auto diff = requirement.difference(other.requirement)) {
-                return term{std::move(*diff), true};
-            }
-            return std::nullopt;
-        } else if (positive && !other.positive) {
-            // this: ---%%%%%%%%%---------
-            // that: %%%%%%-----%%%%%%%%%%
-            // res:  ------%%%%%----------
-            if (auto isect = requirement.intersection(other.requirement)) {
-                return term{std::move(*isect), true};
-            }
-            return std::nullopt;
-        } else if (!positive && other.positive) {
-            // this: %%%%%%----%%%%%%%%%%%
-            // that: ----%%%%%%%%%%%------
-            // res:  %%%%-----------%%%%%%
-            // or:
-            // this: %%%%-----------%%%%%%
-            // that: -------%%%%%---------
-            // res:  %%%%-----------%%%%%%
-            // or:
-            // this: %%%%%%%----------%%%%
-            // that: ----%%%%%%%%%----%%%%
-            // res:  %%%%-------------%%%%
-            if (auto un = requirement.union_(other.requirement)) {
-                return term{std::move(*un), false};
-            }
-            return std::nullopt;
-        } else {
-            assert(!positive && !other.positive);
-            // this: %%%%%%--------%%%%%%%%
-            // that: %%%%%%%%%%%-----%%%%%%
-            // res:  --------------%%------
-            // or:
-            // this: %%%%%%%%%--------%%%%%
-            // that: %%%%%--------%%%%%%%%%
-            // res:  -----%%%%-------------
-            // or:
-            // this: %%%%-----------%%%%%%%
-            // that: %%---------------%%%%%
-            // res:  --%%-----------%%-----
-            // or:
-            // this: %%%%-------------%%%%%
-            // that: %%%%%%%%%%---%%%%%%%%%
-            // res:  ----------------------
-            if (auto diff = other.requirement.difference(requirement)) {
-                return term{std::move(*diff), true};
-            }
-            return std::nullopt;
-        }
+        return intersection(other.inverse());
     }
 
     /**
