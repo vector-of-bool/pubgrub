@@ -4,8 +4,6 @@
 
 #include <catch2/catch.hpp>
 
-// static_assert(pubgrub::requirement<req>);
-
 template <pubgrub::requirement R>
 void foo(const R&) {}
 

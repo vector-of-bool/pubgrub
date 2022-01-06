@@ -30,6 +30,25 @@ namespace detail {
 
 namespace sr = std::ranges;
 
+template <typename T>
+struct try_repr {
+    const T& item;
+
+    friend void do_repr(auto out, const try_repr* self) {
+        if constexpr (decltype(out)::template can_repr<T>) {
+            out.type("{}", out.template repr_type<T>());
+            if (self) {
+                out.value("{}", out.template repr_value(self->item));
+            }
+        } else {
+            out.type("[unrepresentable]");
+            if (self) {
+                out.value("[unrepresentable]");
+            }
+        }
+    }
+};
+
 template <typename IC>
 class ic_record;
 
@@ -63,10 +82,11 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
     using ic_by_key_seq_vec = std::vector<ic_by_key_seq, rebind_alloc_t<ic_by_key_seq>>;
     ic_by_key_seq_vec _by_key{_alloc};
 
-    typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key_) const noexcept {
+    auto _seq_for_key(const key_type& key_) const noexcept {
         return sr::partition_point(_by_key, NEO_TL(_1.key < key_));
     }
-    typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key_) noexcept {
+
+    auto _seq_for_key(const key_type& key_) noexcept {
         return sr::partition_point(_by_key, NEO_TL(_1.key < key_));
     }
 
@@ -220,6 +240,7 @@ struct solver {
      * @brief Perform unit propagation for the (pkg of) the given key
      */
     void propagate_for(const key_type& k) {
+        neo_assertion_breadcrumbs("Performing unit propagation", k);
         auto ics_for_name = ics.for_name(k);
         for (const ic_type& ic : ics_for_name) {
             if (!propagate_one(ic)) {
@@ -235,6 +256,7 @@ struct solver {
      * @return false When we are done with this incompatibility
      */
     bool propagate_one(const ic_type& ic) {
+        neo_assertion_breadcrumbs("Propagating incompatibility", ic);
         auto res = check_conflict(ic);
 
         if (auto almost = std::get_if<almost_conflict>(&res)) {
@@ -245,7 +267,12 @@ struct solver {
             const ic_type& root_cause = resolve_conflict(ic);
             auto           res2       = check_conflict(root_cause);
             auto           almost2    = std::get_if<almost_conflict>(&res2);
-            assert(almost2 && "Conflict resolution entered an invalid state");
+            neo_assert(invariant,
+                       std::holds_alternative<almost_conflict>(res2),
+                       "Expected conflict resolution term to be an almost-conflict with the "
+                       "partial solution so that we can make a subsequence derivation from it.",
+                       ic,
+                       root_cause);
             sln.record_derivation(almost2->term.inverse(), root_cause);
             changed.clear();
             changed.insert(almost2->term.key());
@@ -258,6 +285,8 @@ struct solver {
     }
 
     conflict_result check_conflict(const ic_type& ic) const noexcept {
+        neo_assertion_breadcrumbs("Checking for conflicts", ic);
+
         const term_type* unsat_term = nullptr;
         for (const term_type& term : ic.terms()) {
             auto rel = sln.relation_to(term);
@@ -281,9 +310,11 @@ struct solver {
     }
 
     const ic_type& resolve_conflict(std::reference_wrapper<const ic_type> ic_) {
+        auto& original_ic = ic_;
         while (true) {
-            const ic_type& ic          = ic_;
-            const auto&    opt_bt_info = sln.build_backtrack_info(ic.terms());
+            const ic_type& ic = ic_;
+            neo_assertion_breadcrumbs("Performing conflict resolution", original_ic, ic);
+            const auto& opt_bt_info = sln.build_backtrack_info(ic.terms());
             if (!opt_bt_info) {
                 // There is nowhere left to backtrack to: There is no possible
                 // solution!
@@ -309,37 +340,20 @@ struct solver {
                 if (difference) {
                     new_terms.push_back(difference->inverse());
                 }
-                assert(std::all_of(new_terms.cbegin(),
-                                   new_terms.cend(),
-                                   [&](const term_type& term) { return sln.satisfies(term); }));
+                neo_assert(expects,
+                           sr::all_of(new_terms, [&](auto&& term) { return sln.satisfies(term); }),
+                           "Expected conflict resolution term to be satisfied by partial solution",
+                           new_terms);
 
                 ic_ = ics.emplace_record(std::move(new_terms),
                                          alloc,
                                          conflict_cause_type{ic, *satisfier.cause});
-                assert(std::holds_alternative<conflict>(check_conflict(ic_)));
+                neo_assert(expects,
+                           std::holds_alternative<conflict>(check_conflict(ic_)),
+                           "Expected new derived incompatibility to be in conflict with the "
+                           "partial solution");
             }
         }
-    }
-
-    auto build_prior_cause_term(const ic_type&  ic,
-                                const ic_type&  prev_sat_cause,
-                                const key_type& exclude_key) const noexcept {
-        auto copy_filter
-            = [&](const term_type& term) { return !keys_equivalent(term.key(), exclude_key); };
-        using term_alloc = detail::rebind_alloc_t<Allocator, term_type>;
-        typename ic_type::term_vec terms{term_alloc(alloc)};
-        std::copy_if(ic.terms().begin(),  //
-                     ic.terms().end(),
-                     std::back_inserter(terms),
-                     copy_filter);
-        std::copy_if(prev_sat_cause.terms().begin(),
-                     prev_sat_cause.terms().end(),
-                     std::back_inserter(terms),
-                     copy_filter);
-        assert(std::all_of(ic.terms().cbegin(), ic.terms().cend(), [&](const term_type& term) {
-            return sln.satisfies(term);
-        }));
-        return terms;
     }
 };
 
@@ -347,6 +361,7 @@ struct solver {
 
 template <requirement_range Range, provider<std::ranges::range_value_t<Range>> P>
 decltype(auto) solve(Range&& c, P&& p) {
+    neo_assertion_breadcrumbs("Solving dependency set", detail::try_repr{c}, detail::try_repr{p});
     detail::solver<std::ranges::range_value_t<Range>, P> solver{p};
     for (auto&& req : c) {
         solver.preload_root(req);

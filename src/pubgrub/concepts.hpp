@@ -57,10 +57,13 @@ concept keyed = requires(const T item) {
     requires key<std::remove_cvref_t<decltype(detail::key_of_impl(item))>>;
 };
 
-template <keyed K>
-constexpr decltype(auto) key_of(const K& k) noexcept {
-    return detail::key_of_impl(k);
-}
+struct key_of_fn {
+    constexpr decltype(auto) operator()(keyed auto const& value) const noexcept {
+        return detail::key_of_impl(value);
+    }
+};
+
+inline constexpr key_of_fn key_of;
 
 template <keyed T>
 using key_type_t = std::remove_cvref_t<decltype(key_of(std::declval<T&&>()))>;

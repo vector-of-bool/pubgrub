@@ -4,8 +4,8 @@
 #include <pubgrub/interval.hpp>
 #include <pubgrub/term.hpp>
 
-#include <string>
 #include <optional>
+#include <string>
 
 namespace pubgrub::test {
 
@@ -106,6 +106,13 @@ struct simple_req {
 
     friend bool operator==(const simple_req& lhs, const simple_req& rhs) noexcept {
         return std::tie(lhs.key, lhs.range) == std::tie(rhs.key, rhs.range);
+    }
+
+    friend void do_repr(auto out, const simple_req* self) {
+        out.type("pubgrub::test::simple_req");
+        if (self) {
+            out.value("{}@{}", self->key, out.repr_value(self->range));
+        }
     }
 
     friend std::ostream& operator<<(std::ostream& out, const simple_req& req) {

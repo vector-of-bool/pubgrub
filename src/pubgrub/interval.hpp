@@ -267,6 +267,32 @@ public:
         }
         return out;
     }
+
+    friend void do_repr(auto out, const interval_set* self) noexcept {
+        constexpr bool can_repr_elem = decltype(out)::template can_repr<element_type>;
+        if constexpr (can_repr_elem) {
+            out.type("pubgrub::interval_set<{}>", out.template repr_type<element_type>());
+        } else {
+            out.type("pubgrub::interval_set<[…]>");
+        }
+        if (self) {
+            if constexpr (not can_repr_elem) {
+                out.value("[…]");
+            } else {
+                out.append("{");
+                auto pairs = self->iter_intervals();
+                for (auto it = pairs.begin(); it != pairs.end(); ++it) {
+                    auto&& low = it->low;
+                    auto&& hi  = it->high;
+                    out.append("[{}, {})", out.repr_value(low), out.repr_value(hi));
+                    if (std::next(it) != pairs.end()) {
+                        out.append(" ∪ ");
+                    }
+                }
+                out.append("}");
+            }
+        }
+    }
 };
 
 }  // namespace pubgrub

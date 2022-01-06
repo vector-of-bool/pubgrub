@@ -36,9 +36,7 @@ private:
     cause_type _cause;
 
     void _coalesce() noexcept {
-        std::sort(_terms.begin(), _terms.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.key() < rhs.key();
-        });
+        std::ranges::sort(_terms, std::less<>{}, pubgrub::key_of);
         auto walk = _terms.begin();
         while (walk != _terms.end()) {
             walk = _coalesce_at(walk);
@@ -46,9 +44,11 @@ private:
     }
 
     auto _coalesce_at(typename term_vec::iterator pos) noexcept {
-        auto subseq_end = std::find_if(pos, _terms.end(), [&](const auto& term) {
-            return pos->key() != term.key();
-        });
+        auto subseq_end = std::ranges::lower_bound(pos,
+                                                   _terms.end(),
+                                                   pos->key(),
+                                                   std::less_equal<>{},
+                                                   pubgrub::key_of);
         assert(pos != subseq_end);
         *pos = std::accumulate(std::next(pos),
                                subseq_end,
@@ -98,20 +98,23 @@ public:
     const term_vec&   terms() const noexcept { return _terms; }
     const cause_type& cause() const noexcept { return _cause; }
 
-    friend std::ostream& operator<<(std::ostream& out, const incompatibility& ic) noexcept {
-        out << "{";
-        auto&      terms = ic.terms();
-        auto       it    = terms.cbegin();
-        const auto end   = terms.cend();
-        while (it != end) {
-            out << *it;
-            ++it;
-            if (it != end) {
-                out << " ∩ ";
-            }
+    friend void do_repr(auto out, const incompatibility* self) noexcept {
+        constexpr bool can_repr_req = decltype(out)::template can_repr<Requirement>;
+        if constexpr (can_repr_req) {
+            out.type("pubgrub::incompatibility<{}>", out.template repr_type<Requirement>());
+        } else {
+            out.type("pubgrub::incompatibility<[…]>");
         }
-        out << "}";
-        return out;
+        if (self) {
+            out.append("{");
+            for (auto it = self->terms().cbegin(); it != self->terms().cend(); ++it) {
+                out.append("{}", out.repr_value(*it));
+                if (std::next(it) != self->terms().cend()) {
+                    out.append(" ∧ ");
+                }
+            }
+            out.append("}");
+        }
     }
 };
 
