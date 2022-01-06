@@ -68,8 +68,7 @@ struct term {
      * Obtain a term that is the logical intersection of the two ranges defined by the terms
      */
     std::optional<term> intersection(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key())
-               && "Cannot perform set operations on terms of differing keys");
+        assert(key() == other.key() && "Cannot perform set operations on terms of differing keys");
         if (positive && other.positive) {
             // Simple case.
             if (auto isect = requirement.intersection(other.requirement)) {
@@ -132,7 +131,7 @@ struct term {
      * that is: every version in `other` is contained within `this`.
      */
     bool implied_by(const term& other) const noexcept {
-        if (!keys_equivalent(key(), other.key())) {
+        if (key() != other.key()) {
             // Unrelated terms cannot imply eachother
             return false;
         }
@@ -198,7 +197,7 @@ struct term {
      * two terms share no common versions, and thus cannot be true simultaneously
      */
     bool excludes(const term& other) const noexcept {
-        if (!keys_equivalent(key(), other.key())) {
+        if (key() != other.key()) {
             // Unrelated terms cannot exclude eachother
             return false;
         }
@@ -236,7 +235,7 @@ struct term {
     }
 
     set_relation relation_to(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key()));
+        assert(key() == other.key());
         if (implies(other)) {
             return set_relation::subset;
         } else if (excludes(other)) {

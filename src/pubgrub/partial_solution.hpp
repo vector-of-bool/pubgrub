@@ -165,7 +165,7 @@ public:
         std::optional<term_type> assigned_term;
 
         for (const assignment& as : _assignments) {
-            if (!keys_equivalent(as.term.key(), term.key())) {
+            if (as.term.key() != term.key()) {
                 continue;
             }
 

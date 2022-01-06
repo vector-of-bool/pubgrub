@@ -6,38 +6,39 @@
 #include <pubgrub/partial_solution.hpp>
 #include <pubgrub/term.hpp>
 
-#include <deque>
-#include <list>
+#include <neo/tl.hpp>
+
 #include <initializer_list>
 #include <iostream>
+#include <list>
 #include <set>
 #include <variant>
 #include <vector>
 
 namespace pubgrub {
 
-// clang-format off
 template <typename Provider, typename Req>
-concept provider =
-    requirement<Req>
-    &&
-requires(const Provider provider, const Req requirement) {
+concept provider = requirement<Req> && requires(const Provider provider, const Req requirement) {
     { provider.best_candidate(requirement) } -> detail::boolean;
-    { *provider.best_candidate(requirement) } -> detail::convertible_to<const Req&>;
+    { *provider.best_candidate(requirement) } -> std::convertible_to<const Req&>;
     { provider.requirements_of(requirement) } -> detail::range_of<Req>;
 };
-// clang-format on
+
+static_assert(true);  // Magically keeps clang-format from indenting the rest of the file (??)
 
 namespace detail {
+
+namespace sr = std::ranges;
 
 template <typename IC>
 class ic_record;
 
 template <typename Requirement, typename Allocator>
 class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
-    using requirement_type = Requirement;
-    using allocator_type   = Allocator;
-    using ic_type          = incompatibility<requirement_type, allocator_type>;
+    using requirement_type    = Requirement;
+    using allocator_type      = Allocator;
+    using ic_type             = incompatibility<requirement_type, allocator_type>;
+    using conflict_cause_type = typename ic_type::conflict_cause;
 
     using term_type = typename ic_type::term_type;
     using key_type  = typename term_type::key_type;
@@ -55,6 +56,7 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
 
     allocator_type _alloc;
 
+    // Use std::list so elements to not move after creations
     using list_type = std::list<ic_type, rebind_alloc_t<ic_type>>;
     list_type _ics{_alloc};
 
@@ -62,25 +64,19 @@ class ic_record<pubgrub::incompatibility<Requirement, Allocator>> {
     ic_by_key_seq_vec _by_key{_alloc};
 
     typename ic_by_key_seq_vec::const_iterator _seq_for_key(const key_type& key_) const noexcept {
-        return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key_;
-        });
+        return sr::partition_point(_by_key, NEO_TL(_1.key < key_));
     }
     typename ic_by_key_seq_vec::iterator _seq_for_key(const key_type& key_) noexcept {
-        return std::partition_point(_by_key.begin(), _by_key.end(), [&](const auto& check) {
-            return check.key < key_;
-        });
+        return sr::partition_point(_by_key, NEO_TL(_1.key < key_));
     }
 
     const ic_type& _add_ic_to_err(std::list<ic_type>& ics, const ic_type& ic) noexcept {
         auto cause    = ic.cause();
-        auto conflict = std::get_if<typename ic_type::conflict_cause>(&cause);
+        auto conflict = std::get_if<conflict_cause_type>(&cause);
         if (conflict) {
             const ic_type& left  = _add_ic_to_err(ics, conflict->left);
             const ic_type& right = _add_ic_to_err(ics, conflict->right);
-            return ics.emplace_back(ic.terms(),
-                                    _alloc,
-                                    typename ic_type::conflict_cause{left, right});
+            return ics.emplace_back(ic.terms(), _alloc, conflict_cause_type{left, right});
         } else {
             return ics.emplace_back(ic.terms(), _alloc, ic.cause());
         }
@@ -120,15 +116,16 @@ public:
     [[noreturn]] void throw_failure(const ic_type& root) { throw _build_exception(root); }
 };
 
-template <requirement Req, provider<Req> P, typename Allocator>
+template <requirement Req, provider<Req> P, typename Allocator = std::allocator<Req>>
 struct solver {
-    using requirement_type = Req;
-    using provider_type    = P;
-    using allocator_type   = Allocator;
-    using ic_type          = incompatibility<requirement_type, allocator_type>;
-    using sln_type         = partial_solution<requirement_type, allocator_type>;
-    using term_type        = typename ic_type::term_type;
-    using key_type         = typename term_type::key_type;
+    using requirement_type    = Req;
+    using provider_type       = P;
+    using allocator_type      = Allocator;
+    using ic_type             = incompatibility<requirement_type, allocator_type>;
+    using sln_type            = partial_solution<requirement_type, allocator_type>;
+    using term_type           = typename ic_type::term_type;
+    using key_type            = typename term_type::key_type;
+    using conflict_cause_type = typename ic_type::conflict_cause;
 
     template <typename T>
     using rebind_alloc = detail::rebind_alloc_t<allocator_type, T>;
@@ -142,8 +139,9 @@ struct solver {
 
     using conflict_result = std::variant<conflict, no_conflict, almost_conflict>;
 
-    allocator_type alloc;
     provider_type& provider;
+
+    allocator_type alloc{};
 
     ic_record<ic_type> ics{alloc};
     key_set_type       changed = key_set_type(rebind_alloc<key_type>(alloc));
@@ -208,34 +206,47 @@ struct solver {
         changed.insert(key_of(*cand_req));
     }
 
+    /**
+     * @brief Perform unit propagation until there are not pending changes
+     */
     void unit_propagation() {
         while (!changed.empty()) {
             auto next_unit = changed.extract(changed.begin());
-            propagate_one(next_unit.value());
+            propagate_for(next_unit.value());
         }
     }
 
-    void propagate_one(const key_type& k) {
+    /**
+     * @brief Perform unit propagation for the (pkg of) the given key
+     */
+    void propagate_for(const key_type& k) {
         auto ics_for_name = ics.for_name(k);
         for (const ic_type& ic : ics_for_name) {
-            if (!propagate_ic(ic)) {
+            if (!propagate_one(ic)) {
                 break;
             }
         }
     }
 
-    bool propagate_ic(const ic_type& ic) {
+    /**
+     * @brief Propagate a single given incompatibility
+     *
+     * @return true If we have more work to do
+     * @return false When we are done with this incompatibility
+     */
+    bool propagate_one(const ic_type& ic) {
         auto res = check_conflict(ic);
 
         if (auto almost = std::get_if<almost_conflict>(&res)) {
             sln.record_derivation(almost->term.inverse(), ic);
             changed.insert(almost->term.key());
         } else if (std::holds_alternative<conflict>(res)) {
-            const ic_type& conflict_cause = resolve_conflict(ic);
-            auto           res2           = check_conflict(conflict_cause);
-            auto           almost2        = std::get_if<almost_conflict>(&res2);
+            // The cause of the conflict
+            const ic_type& root_cause = resolve_conflict(ic);
+            auto           res2       = check_conflict(root_cause);
+            auto           almost2    = std::get_if<almost_conflict>(&res2);
             assert(almost2 && "Conflict resolution entered an invalid state");
-            sln.record_derivation(almost2->term.inverse(), conflict_cause);
+            sln.record_derivation(almost2->term.inverse(), root_cause);
             changed.clear();
             changed.insert(almost2->term.key());
             return false;
@@ -304,7 +315,7 @@ struct solver {
 
                 ic_ = ics.emplace_record(std::move(new_terms),
                                          alloc,
-                                         typename ic_type::conflict_cause{ic, *satisfier.cause});
+                                         conflict_cause_type{ic, *satisfier.cause});
                 assert(std::holds_alternative<conflict>(check_conflict(ic_)));
             }
         }
@@ -334,30 +345,18 @@ struct solver {
 
 }  // namespace detail
 
-template <requirement_iterator Iter, provider<detail::value_type_t<Iter>> P, typename Allocator>
-decltype(auto) solve(Iter it, Iter stop, P&& p, Allocator alloc) {
-    detail::solver<detail::value_type_t<Iter>, P, Allocator> solver{alloc, p};
-    for (; it != stop; ++it) {
-        solver.preload_root(*it);
+template <requirement_range Range, provider<std::ranges::range_value_t<Range>> P>
+decltype(auto) solve(Range&& c, P&& p) {
+    detail::solver<std::ranges::range_value_t<Range>, P> solver{p};
+    for (auto&& req : c) {
+        solver.preload_root(req);
     }
     return solver.solve();
 }
 
-template <requirement_iterator Iter, provider<detail::value_type_t<Iter>> P>
-decltype(auto) solve(Iter it, Iter stop, P&& p) {
-    return solve(it, stop, p, std::allocator<detail::value_type_t<Iter>>());
-}
-
-template <requirement_range Container, provider<detail::range_value_type_t<Container>> P>
-decltype(auto) solve(Container&& c, P&& p) {
-    using std::begin;
-    using std::end;
-    return solve(begin(c), end(c), p);
-}
-
 template <requirement Req, provider<Req> P>
 decltype(auto) solve(std::initializer_list<term<Req>> il, P&& p) {
-    return solve(il.begin(), il.end(), p);
+    return solve(std::ranges::subrange{il.begin(), il.end()}, p);
 }
 
 }  // namespace pubgrub

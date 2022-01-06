@@ -54,7 +54,7 @@ private:
                                subseq_end,
                                *pos,
                                [](const term_type& lhs, const term_type& rhs) -> term_type {
-                                   assert(keys_equivalent(lhs.key(), rhs.key()));
+                                   assert(lhs.key() == rhs.key());
                                    auto un = lhs.intersection(rhs);
                                    assert(un);
                                    return *un;
