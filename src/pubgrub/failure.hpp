@@ -73,6 +73,13 @@ struct needed {
     const Req& requirement;
 };
 
+template <requirement Req>
+struct compromise {
+    const Req& left;
+    const Req& right;
+    const Req& result;
+};
+
 struct separator {};
 
 template <typename Inner>
@@ -168,6 +175,14 @@ struct failure_writer {
                 // A single negative term indicates that the requirement is absolute.
                 auto need = explain::needed<requirement_type>{terms[0].requirement};
                 r(need);
+            }
+        } else if (terms.size() == 3) {
+            if (terms[0].positive and terms[1].positive and not terms[2].positive) {
+                r(explain::compromise<requirement_type>{terms[0].requirement,
+                                                        terms[1].requirement,
+                                                        terms[2].requirement});
+            } else {
+                _die();
             }
         } else if (terms.size() == 0) {
             r(explain::no_solution());

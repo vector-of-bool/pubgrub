@@ -331,6 +331,23 @@ TEST_CASE("Unsolvable") {
                   repo(pkg("foo", 100, {}), pkg("foo", 200, {})),
                   reqs(req("foo", {100, 101}), req("foo", {200, 201})),
                   sln()),
+        test_case("Overlapping constraints resolve to unsolvable package",
+                  repo(pkg("foo", 100, {req("shared", {100, 300})}),
+                       pkg("bar", 100, {req("shared", {200, 400})}),
+                       pkg("shared", 150, {}),
+                       pkg("shared", 350, {}),
+                       pkg("shared", 250, {req("nonesuch", {100, 200})})),
+                  reqs(req("foo", {100, 101}), req("bar", {100, 101})),
+                  sln()),
+        test_case("Overlapping constraints result in transitive incompatibility",
+                  repo(pkg("foo", 1, {req("asdf", {100, 300})}),
+                       pkg("bar", 100, {req("jklm", {200, 400})}),
+                       pkg("asdf", 200, {req("baz", {3, 4})}),
+                       pkg("jklm", 300, {req("baz", {4, 5})}),
+                       pkg("baz", 3, {}),
+                       pkg("baz", 4, {})),
+                  reqs(req("foo", {1, 2}), req("bar", {100, 200})),
+                  sln()),
         test_case("Unsolvable",
                   repo(pkg("a", 100, {req("b", {100, 101})}),
                        pkg("a", 200, {req("b", {200, 201})}),
@@ -371,6 +388,10 @@ struct explain_handler {
 
     void say(pubgrub::explain::conflict<pubgrub::test::simple_req> conf) {
         message << conf.a << " conflicts with " << conf.b;
+    }
+
+    void say(pubgrub::explain::compromise<pubgrub::test::simple_req> comp) {
+        message << comp.left << " and " << comp.right << " aggree on " << comp.result;
     }
 
     void say(pubgrub::explain::no_solution) { message << "There is no solution"; }
