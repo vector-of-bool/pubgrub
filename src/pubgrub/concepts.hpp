@@ -8,7 +8,6 @@
 
 namespace pubgrub {
 
-// clang-format offf
 namespace detail {
 
 template <typename B>
@@ -84,6 +83,11 @@ template <typename R>
 concept requirement_range
     = std::ranges::input_range<R> && requirement<std::ranges::range_value_t<R>>;
 
-// clang-format on
+template <typename Provider, typename Req>
+concept provider = requirement<Req> && requires(const Provider provider, const Req requirement) {
+    { provider.best_candidate(requirement) } -> detail::boolean;
+    { *provider.best_candidate(requirement) } -> std::convertible_to<const Req&>;
+    { provider.requirements_of(requirement) } -> detail::range_of<Req>;
+};
 
 }  // namespace pubgrub

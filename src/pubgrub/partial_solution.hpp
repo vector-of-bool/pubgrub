@@ -162,16 +162,13 @@ public:
     }
 
     const requirement_type* next_unsatisfied_term() const noexcept {
-        auto unsat = std::find_if(  //
-            _positives.cbegin(),
-            _positives.cend(),
-            [&](const auto& pair) noexcept {
-                const term_type& cand     = pair.second;
-                auto             dec_iter = _decided_keys.find(cand.key());
-                return dec_iter == _decided_keys.cend();
-            });
-        if (unsat != _positives.cend()) {
-            return &unsat->second.requirement;
+        // Find the first positive term which has a key that has not already been decided
+        auto found = std::ranges::find_if_not(
+            _positives,
+            [&](auto&& key) { return _decided_keys.contains(key); },
+            [&](auto&& pair) { return pair.second.key(); });
+        if (found != _positives.cend()) {
+            return &found->second.requirement;
         } else {
             return nullptr;
         }
@@ -274,6 +271,20 @@ public:
                                   std::move(difference)};
         } else {
             return std::nullopt;
+        }
+    }
+
+    friend void do_repr(auto out, const partial_solution* self) noexcept {
+        out.type("pubgrub::partial_solution<…>");
+        if (self) {
+            out.append("{assignments: ");
+            for (auto it = self->_assignments.cbegin(); it != self->_assignments.cend(); ++it) {
+                out.append("{}", out.repr_value(*it));
+                if (std::next(it) != self->_assignments.cend()) {
+                    out.append(" ∧ ");
+                }
+            }
+            out.append("}");
         }
     }
 };
