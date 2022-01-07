@@ -10,33 +10,33 @@ jobs:
           echo Loading VS environment
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\Tools\vsdevcmd" -arch=x64 || exit 1
           echo Executing Build and Tests
-          pwsh -noni -c iwr https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.3/dds-win-x64.exe -OutFile dds.exe || exit 1
+          pwsh -noni -c iwr https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.6/dds-win-x64.exe -OutFile dds.exe || exit 1
           .\dds.exe build -t tools/msvc.jsonc
         displayName: Build and Run Unit Tests
 
-  - job: Linux_GCC9
+  - job: Linux_GCC10
     pool:
       vmImage: ubuntu-18.04
     steps:
       - script: |
           set -eu
           sudo apt update -y
-          sudo apt install -y g++-9
-          curl -L https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.3/dds-linux-x64 -o dds
+          sudo apt install -y g++-10
+          curl -L https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.6/dds-linux-x64 -o dds
           chmod +x dds
         displayName: Prepare System
-      - script: ./dds build -t tools/gcc-9.jsonc
+      - script: ./dds build -t tools/gcc-10.jsonc
         displayName: Build and Run Unit Tests
 
-  - job: macOS_GCC9
+  - job: macOS_GCC10
     pool:
-      vmImage: macOS-10.14
+      vmImage: macOS-10.15
     steps:
       - script: |
           set -eu
-          brew install gcc@9
-          curl -L https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.3/dds-macos-x64 -o dds
+          brew install gcc@10
+          curl -L https://github.com/vector-of-bool/dds/releases/download/0.1.0-alpha.6/dds-macos-x64 -o dds
           chmod +x dds
         displayName: Prepare System
-      - script: ./dds build -t tools/gcc-9.jsonc
+      - script: ./dds build -t tools/gcc-10.jsonc
         displayName: Build and Run Unit Tests

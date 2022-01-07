@@ -2,6 +2,8 @@
 
 #include <pubgrub/concepts.hpp>
 
+#include <neo/assert.hpp>
+
 #include <cassert>
 #include <optional>
 #include <ostream>
@@ -34,8 +36,12 @@ struct term {
     term inverse() const noexcept { return term{requirement, !positive}; }
 
     std::optional<term> union_(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key())
-               && "Cannot perform set operations on terms of differing keys");
+        neo_assert(invariant,
+                   key() == other.key(),
+                   "Attempted to perform set operations on terms of differing keys. This is a bug "
+                   "in vob/pubgrub.",
+                   *this,
+                   other);
         if (positive == other.positive) {
             // Simple case.
             if (auto un = requirement.union_(other.requirement)) {
@@ -68,8 +74,12 @@ struct term {
      * Obtain a term that is the logical intersection of the two ranges defined by the terms
      */
     std::optional<term> intersection(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key())
-               && "Cannot perform set operations on terms of differing keys");
+        neo_assert(invariant,
+                   key() == other.key(),
+                   "Attempted to perform set operations on terms of differing keys. This is a bug "
+                   "in vob/pubgrub.",
+                   *this,
+                   other);
         if (positive && other.positive) {
             // Simple case.
             if (auto isect = requirement.intersection(other.requirement)) {
@@ -100,7 +110,7 @@ struct term {
             // But this is still funadmentally incorrect. Assuming the pubgrub
             // algorithm never gets us in such a situation, we'll assume that this
             // path won't be taken in normal code.
-            assert(false && "Faulty assumption in the pubgrub impl. This is a BUG!");
+            neo_assert(invariant, false, "Faulty assumption in the pubgrub impl. This is a BUG!");
             std::terminate();
         }
 
@@ -124,6 +134,12 @@ struct term {
     }
 
     std::optional<term> difference(const term& other) const noexcept {
+        neo_assert(invariant,
+                   key() == other.key(),
+                   "Attempted to perform set operations on terms of differing keys. This is a bug "
+                   "in vob/pubgrub.",
+                   *this,
+                   other);
         return intersection(other.inverse());
     }
 
@@ -132,7 +148,7 @@ struct term {
      * that is: every version in `other` is contained within `this`.
      */
     bool implied_by(const term& other) const noexcept {
-        if (!keys_equivalent(key(), other.key())) {
+        if (key() != other.key()) {
             // Unrelated terms cannot imply eachother
             return false;
         }
@@ -198,7 +214,7 @@ struct term {
      * two terms share no common versions, and thus cannot be true simultaneously
      */
     bool excludes(const term& other) const noexcept {
-        if (!keys_equivalent(key(), other.key())) {
+        if (key() != other.key()) {
             // Unrelated terms cannot exclude eachother
             return false;
         }
@@ -236,7 +252,12 @@ struct term {
     }
 
     set_relation relation_to(const term& other) const noexcept {
-        assert(keys_equivalent(key(), other.key()));
+        neo_assert(invariant,
+                   key() == other.key(),
+                   "Attempted to perform set operations on terms of differing keys. This is a bug "
+                   "in vob/pubgrub.",
+                   *this,
+                   other);
         if (implies(other)) {
             return set_relation::subset;
         } else if (excludes(other)) {
@@ -246,13 +267,28 @@ struct term {
         }
     }
 
-    friend std::ostream& operator<<(std::ostream& out, const term& self) noexcept {
-        out << "[";
-        if (!self.positive) {
-            out << "not ";
+    friend void do_repr(auto out, const term* self) noexcept {
+        constexpr bool can_repr_req = decltype(out)::template can_repr<Requirement>;
+        if constexpr (can_repr_req) {
+            out.type("pubgrub::term<{}>", out.template repr_type<Requirement>());
+        } else {
+            out.type("pubgrub::term<[…]>");
         }
-        out << self.requirement << "]";
-        return out;
+        if (self) {
+            if constexpr (can_repr_req) {
+                if (self->positive) {
+                    out.value("{}", out.repr_value(self->requirement));
+                } else {
+                    out.bracket_value("¬ {}", out.repr_value(self->requirement));
+                }
+            } else {
+                if (self->positive) {
+                    out.value("[…]");
+                } else {
+                    out.bracket_value("¬ […]");
+                }
+            }
+        }
     }
 
     friend bool operator==(const term& lhs, const term& rhs) noexcept {

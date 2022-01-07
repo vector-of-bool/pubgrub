@@ -1,3 +1,6 @@
 {
-    "name": "pubgrub"
+    "name": "pubgrub",
+    "uses": [
+        "neo/fun"
+    ]
 }

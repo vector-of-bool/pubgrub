@@ -1,26 +1,18 @@
 #pragma once
 
-#include <functional>
+#include <neo/invoke.hpp>
+
 #include <iterator>
-#include <memory>
+#include <ranges>
 #include <type_traits>
 
 namespace pubgrub {
 
-// clang-format off
 namespace detail {
-
-template <typename T, typename U>
-concept same_as = std::is_same_v<T, U>;
 
 template <typename B>
 concept boolean = requires(const B b) {
-    { b ? 0 : 0 };
-};
-
-template <typename T>
-concept simple_comparable = requires(const T value) {
-    { value < value } -> boolean;
+    {b ? 0 : 0};
 };
 
 template <typename T>
@@ -30,97 +22,53 @@ concept equality_comparable = requires(const T& value) {
 };
 
 template <typename From, typename To>
-concept convertible_to = std::is_convertible_v<From, To>;
-
-template <typename From, typename To>
-concept constructible_to = std::is_constructible_v<To, From>;
-
-template <typename From, typename To>
-concept decays_to = same_as<std::decay_t<From>, To>;
-
-template <typename Iter>
-concept input_iterator = requires(Iter iter, const Iter c_iter) {
-    { c_iter != c_iter } -> boolean;
-    { *c_iter };
-    { ++iter };
-};
-
-template <input_iterator Iter>
-using value_type_t = typename std::iterator_traits<Iter>::value_type;
+concept decays_to = std::same_as<std::decay_t<From>, To>;
 
 template <typename Iter, typename Type>
-concept iterator_of = input_iterator<Iter> && convertible_to<value_type_t<Iter>, Type>;
-
-template <typename R>
-concept range = requires(R range) {
-    { std::begin(range) } -> input_iterator;
-    { std::begin(range) != std::end(range) } -> detail::boolean;
-};
-
-template <range R>
-using iterator_type_t = std::decay_t<decltype(std::begin(std::declval<R>()))>;
-
-template <range R>
-using range_value_type_t = value_type_t<iterator_type_t<R>>;
+concept iterator_of
+    = std::input_iterator<Iter> && std::convertible_to<std::iter_value_t<Iter>, Type>;
 
 template <typename R, typename T>
-concept range_of = range<R> && same_as<range_value_type_t<R>, T>;
-
-template <typename T>
-concept copyable = std::is_copy_constructible_v<T> && std::is_copy_assignable_v<T>;
+concept range_of = std::ranges::range<R> && std::same_as<std::ranges::range_value_t<R>, T>;
 
 template <typename Opt, typename Type>
-concept optional_like =
-    boolean<Opt>
-    &&
-requires(const Opt what) {
-    { *what } -> convertible_to<Type>;
+concept optional_like = boolean<Opt> && requires(const Opt what) {
+    { *what } -> std::convertible_to<Type>;
 };
 
 template <typename Allocator, typename Type>
 using rebind_alloc_t = typename std::allocator_traits<Allocator>::template rebind_alloc<Type>;
 
-} // namespace detail
+template <typename T>
+constexpr decltype(auto) key_of_impl(const T& value) noexcept {
+    return neo::invoke(&T::key, value);
+}
+
+}  // namespace detail
 
 template <typename T>
-concept key =
-    detail::simple_comparable<T> &&
-    detail::copyable<T>;
+concept key = std::totally_ordered<T> && std::semiregular<T>;
 
 template <typename T>
 concept keyed = requires(const T item) {
-    // As of writing, MSVC doesn't fully support the compute expression that we'd
-    // like:
-    /// { std::invoke(&T::key) } -> key;
-    { item.key };
-    requires key<decltype(item.key)>;
-} || requires(const T item) {
-    { item.key() };
-    requires key<decltype(item.key())>;
+    { neo::invoke(&std::remove_cvref_t<T>::key, item) }
+    noexcept;
+    requires key<std::remove_cvref_t<decltype(detail::key_of_impl(item))>>;
 };
 
-template <keyed K>
-decltype(auto) key_of(const K& k) {
-    return std::invoke(&K::key, k);
-}
+struct key_of_fn {
+    constexpr decltype(auto) operator()(keyed auto const& value) const noexcept {
+        return detail::key_of_impl(value);
+    }
+};
+
+inline constexpr key_of_fn key_of;
 
 template <keyed T>
-using key_type_t = std::decay_t<decltype(key_of(std::declval<T&&>()))>;
+using key_type_t = std::remove_cvref_t<decltype(key_of(std::declval<T&&>()))>;
 
 template <typename T>
-concept set = requires(const T s) {
-    { s.contains(s) } -> detail::boolean;
-    { s.disjoint(s) } -> detail::boolean;
-    { s.intersection(s) } -> detail::same_as<T>;
-    { s.union_(s) } -> detail::same_as<T>;
-    { s.difference(s) } -> detail::same_as<T>;
-};
-
-template <typename T>
-concept requirement =
-    keyed<T>
-    &&
-requires(const T req) {
+concept requirement = keyed<T> && requires(const T req) {
     { req.implied_by(req) } -> detail::boolean;
     { req.excludes(req) } -> detail::boolean;
     { req.intersection(req) } -> detail::optional_like<T>;
@@ -128,25 +76,18 @@ requires(const T req) {
     { req.difference(req) } -> detail::optional_like<T>;
 };
 
-template <key K>
-bool keys_equivalent(const K& left, const K& right) noexcept {
-    if constexpr (detail::equality_comparable<K>) {
-        return left == right;
-    } else {
-        return !(left < right || right < left);
-    }
-}
-
 template <typename Iter>
-concept requirement_iterator =
-    detail::input_iterator<Iter>
-    && requirement<detail::value_type_t<Iter>>;
+concept requirement_iterator = std::input_iterator<Iter> && requirement<std::iter_value_t<Iter>>;
 
 template <typename R>
-concept requirement_range =
-    detail::range<R>
-    && requirement_iterator<detail::iterator_type_t<R>>;
+concept requirement_range
+    = std::ranges::input_range<R> && requirement<std::ranges::range_value_t<R>>;
 
-// clang-format on
+template <typename Provider, typename Req>
+concept provider = requirement<Req> && requires(const Provider provider, const Req requirement) {
+    { provider.best_candidate(requirement) } -> detail::boolean;
+    { *provider.best_candidate(requirement) } -> std::convertible_to<const Req&>;
+    { provider.requirements_of(requirement) } -> detail::range_of<Req>;
+};
 
 }  // namespace pubgrub

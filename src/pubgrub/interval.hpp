@@ -1,5 +1,8 @@
 #pragma once
 
+#include <neo/iterator_facade.hpp>
+#include <neo/ref_member.hpp>
+
 #include <pubgrub/concepts.hpp>
 
 #include <algorithm>
@@ -10,7 +13,7 @@
 
 namespace pubgrub {
 
-template <detail::simple_comparable ElementType, typename Allocator = std::allocator<ElementType>>
+template <std::totally_ordered ElementType, typename Allocator = std::allocator<ElementType>>
 class interval_set {
 public:
     using element_type   = ElementType;
@@ -31,38 +34,31 @@ private:
     vec_type _points;
     using point_iter = typename vec_type::const_iterator;
 
-    struct pair_iterator {
-        point_iter _it;
+    struct pair_iterator : neo::iterator_facade<pair_iterator> {
+        point_iter _it{};
 
-        using iterator_category = std::random_access_iterator_tag;
-        using difference_type   = std::ptrdiff_t;
-        using value_type        = interval_type;
-        using reference         = const value_type&;
-        using pointer           = const value_type*;
+        pair_iterator() noexcept = default;
+        explicit pair_iterator(point_iter it) noexcept
+            : _it(it) {}
 
-        interval_type operator*() const noexcept { return interval_type{*_it, *std::next(_it)}; }
+        interval_type dereference() const noexcept { return interval_type{*_it, *std::next(_it)}; }
 
-        pair_iterator& operator++() noexcept {
-            std::advance(_it, 2);
-            return *this;
-        }
+        void advance(std::ptrdiff_t off) noexcept { std::advance(_it, off * 2); }
 
-        friend difference_type operator-(pair_iterator lhs, pair_iterator rhs) noexcept {
-            return (lhs._it - rhs._it) / 2;
-        }
-
-        bool operator!=(pair_iterator other) const noexcept { return _it != other._it; }
-
+        auto distance_to(pair_iterator other) const noexcept { return (other._it - _it) / 2; }
         bool operator==(pair_iterator other) const noexcept { return _it == other._it; }
     };
 
     class intervals_view {
+        neo::ref_member<const vec_type> _v;
+
+        friend interval_set;
+        intervals_view(const vec_type& v)
+            : _v(v) {}
+
     public:
-        const vec_type& _v;
-
-        pair_iterator begin() const noexcept { return pair_iterator{_v.cbegin()}; }
-
-        pair_iterator end() const noexcept { return pair_iterator{_v.cend()}; }
+        pair_iterator begin() const noexcept { return pair_iterator{_v.get().cbegin()}; }
+        pair_iterator end() const noexcept { return pair_iterator{_v.get().cend()}; }
     };
 
     auto _find_point_after(const element_type& other_point) const noexcept {
@@ -270,6 +266,32 @@ public:
             }
         }
         return out;
+    }
+
+    friend void do_repr(auto out, const interval_set* self) noexcept {
+        constexpr bool can_repr_elem = decltype(out)::template can_repr<element_type>;
+        if constexpr (can_repr_elem) {
+            out.type("pubgrub::interval_set<{}>", out.template repr_type<element_type>());
+        } else {
+            out.type("pubgrub::interval_set<[…]>");
+        }
+        if (self) {
+            if constexpr (not can_repr_elem) {
+                out.value("[…]");
+            } else {
+                out.append("{");
+                auto pairs = self->iter_intervals();
+                for (auto it = pairs.begin(); it != pairs.end(); ++it) {
+                    auto&& low = it->low;
+                    auto&& hi  = it->high;
+                    out.append("[{}, {})", out.repr_value(low), out.repr_value(hi));
+                    if (std::next(it) != pairs.end()) {
+                        out.append(" ∪ ");
+                    }
+                }
+                out.append("}");
+            }
+        }
     }
 };
 

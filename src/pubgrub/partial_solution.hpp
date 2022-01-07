@@ -3,7 +3,6 @@
 #include <pubgrub/concepts.hpp>
 #include <pubgrub/incompatibility.hpp>
 #include <pubgrub/term.hpp>
-#include <pubgrub/term_accumulator.hpp>
 
 #include <algorithm>
 #include <iostream>
@@ -29,6 +28,22 @@ public:
         std::size_t                 decision_level;
         const incompatibility_type* cause;
         bool                        is_decision() const noexcept { return cause == nullptr; }
+
+        friend void do_repr(auto out, const assignment* self) noexcept {
+            constexpr bool can_repr_req = decltype(out)::template can_repr<requirement_type>;
+            if constexpr (can_repr_req) {
+                out.type("pubgrub::partial_solution::assignment<{}>",
+                         out.template repr_type<requirement_type>());
+            } else {
+                out.type("pubgrub::partial_solution::assignment<[…]>");
+            }
+            if (self) {
+                out.bracket_value("term={}, decision_level={}, cause={}",
+                                  out.repr_value(self->term),
+                                  out.repr_value(self->decision_level),
+                                  out.repr_value(self->cause));
+            }
+        }
     };
 
 private:
@@ -47,10 +62,16 @@ private:
     key_set        _decided_keys{key_allocator_type(_alloc)};
 
     void _register(const term_type& t) {
+        neo_assertion_breadcrumbs("Narrowing assignment caches", t);
         const auto pos_it = _positives.find(t.key());
         if (pos_it != _positives.end()) {
             auto opt_is = pos_it->second.intersection(t);
-            assert(opt_is);
+            neo_assert(expects,
+                       opt_is.has_value(),
+                       "Intersection resulted in a null term, but we expected to narrow down an "
+                       "existing term that was overlapping",
+                       pos_it->second,
+                       t);
             pos_it->second = std::move(*opt_is);
             return;
         }
@@ -59,7 +80,12 @@ private:
         auto neg_it = _negatives.find(term.key());
         if (neg_it != _negatives.end()) {
             auto opt_t = t.intersection(neg_it->second);
-            assert(opt_t);
+            neo_assert(expects,
+                       opt_t.has_value(),
+                       "Intersection resulted in a null term, but we expected to narrow down an "
+                       "existing term that was overlapping",
+                       neg_it->second,
+                       t);
             term = std::move(*opt_t);
         }
 
@@ -68,7 +94,10 @@ private:
                 // Remove the assignment from the negatives list
                 _negatives.erase(neg_it);
             }
-            assert(_positives.find(t.key()) == _positives.end());
+            neo_assert(invariant,
+                       _positives.find(t.key()) == _positives.end(),
+                       "Positive term was not inserted as the final element in the positives list",
+                       term);
             _positives.emplace(t.key(), std::move(term));
         } else {
             _negatives.insert_or_assign(t.key(), std::move(term));
@@ -107,12 +136,14 @@ public:
     }
 
     void record_derivation(term_type term, const incompatibility_type& cause) noexcept {
+        neo_assertion_breadcrumbs("Recording new derivation", term, cause);
         auto& inserted
             = _assignments.emplace_back(assignment{std::move(term), _decided_keys.size(), &cause});
         _register(inserted.term);
     }
 
     void record_decision(term_type term) noexcept {
+        neo_assertion_breadcrumbs("Recording new decision", term);
         [[maybe_unused]] const auto did_insert = _decided_keys.emplace(term.key()).second;
         assert(did_insert && "More than one decision recorded for a single item");
 
@@ -131,22 +162,22 @@ public:
     }
 
     const requirement_type* next_unsatisfied_term() const noexcept {
-        auto unsat = std::find_if(  //
-            _positives.cbegin(),
-            _positives.cend(),
-            [&](const auto& pair) noexcept {
-                const term_type& cand     = pair.second;
-                auto             dec_iter = _decided_keys.find(cand.key());
-                return dec_iter == _decided_keys.cend();
-            });
-        if (unsat != _positives.cend()) {
-            return &unsat->second.requirement;
+        // Find the first positive term which has a key that has not already been decided
+        auto found = std::ranges::find_if_not(
+            _positives,
+            [&](auto&& key) { return _decided_keys.contains(key); },
+            [&](auto&& pair) { return pair.second.key(); });
+        if (found != _positives.cend()) {
+            return &found->second.requirement;
         } else {
             return nullptr;
         }
     }
 
     void backtrack_to(std::size_t decision_level) noexcept {
+        neo_assertion_breadcrumbs("Backtracking partial solution",
+                                  _assignments.back().decision_level,
+                                  decision_level);
         while (_assignments.back().decision_level > decision_level) {
             _assignments.pop_back();
         }
@@ -165,7 +196,7 @@ public:
         std::optional<term_type> assigned_term;
 
         for (const assignment& as : _assignments) {
-            if (!keys_equivalent(as.term.key(), term.key())) {
+            if (as.term.key() != term.key()) {
                 continue;
             }
 
@@ -179,7 +210,14 @@ public:
                 return as;
             }
         }
-        assert(false && "Unreachable");
+        neo_assert(expects,
+                   false,
+                   "Unreachable: Attempted to look up the satisfier of a term that was expected to "
+                   "be satisfied by the partial solution, but no partial solution assignment was "
+                   "found that satisfied the term.",
+                   term,
+                   assigned_term,
+                   _assignments);
         std::terminate();
     }
 
@@ -233,6 +271,20 @@ public:
                                   std::move(difference)};
         } else {
             return std::nullopt;
+        }
+    }
+
+    friend void do_repr(auto out, const partial_solution* self) noexcept {
+        out.type("pubgrub::partial_solution<…>");
+        if (self) {
+            out.append("{assignments: ");
+            for (auto it = self->_assignments.cbegin(); it != self->_assignments.cend(); ++it) {
+                out.append("{}", out.repr_value(*it));
+                if (std::next(it) != self->_assignments.cend()) {
+                    out.append(" ∧ ");
+                }
+            }
+            out.append("}");
         }
     }
 };
