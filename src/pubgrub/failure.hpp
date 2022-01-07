@@ -101,12 +101,14 @@ concept handler = requires(T h) {
     h(std::declval<conclusion<disallowed<Requirement>>>());
     h(std::declval<conclusion<unavailable<Requirement>>>());
     h(std::declval<conclusion<needed<Requirement>>>());
+    h(std::declval<conclusion<compromise<Requirement>>>());
     h(separator());
     h(std::declval<premise<dependency<Requirement>>>());
     h(std::declval<premise<conflict<Requirement>>>());
     h(std::declval<premise<disallowed<Requirement>>>());
     h(std::declval<premise<unavailable<Requirement>>>());
     h(std::declval<premise<needed<Requirement>>>());
+    h(std::declval<premise<compromise<Requirement>>>());
 };
 // clang-format on
 
