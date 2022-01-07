@@ -9,6 +9,7 @@
 #include <numeric>
 #include <ostream>
 #include <variant>
+#include <vector>
 
 namespace pubgrub {
 
