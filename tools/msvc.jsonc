@@ -2,5 +2,5 @@
 // Flags: /std:c++latest
 {
     "compiler_id": "msvc",
-    "flags": "/std:c++latest"
+    "flags": "/std:c++latest /Zc:preprocessor /utf-8"
 }
