@@ -1,9 +1,9 @@
 {
     "name": "pubgrub",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "namespace": "vob",
     "test_driver": "Catch-Main",
     "depends": [
-        "neo-fun@0.11.0"
+        "neo-fun^0.11.0"
     ]
 }
