@@ -1,0 +1,7 @@
+{
+    "compiler_id": "gnu",
+    "cxx_version": "c++20",
+    "cxx_compiler": "g++-11",
+    "warning_flags": "-Werror=return-type -D_GLIBCXX_DEBUG",
+    "debug": true
+}
